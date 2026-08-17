@@ -1,0 +1,6 @@
+{
+  "id": "golden-mongodb",
+  "version": "0.1.0",
+  "description": "Fail-closed read-only MongoDB inventory for golden conversations",
+  "entrypoint": "plugin.py"
+}

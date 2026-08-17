@@ -1,0 +1,6 @@
+{
+  "id": "factory-control",
+  "version": "0.1.0",
+  "entrypoint": "plugin.py",
+  "description": "GPT-5.6-sol agent auditing and durable conversation-factory controls"
+}

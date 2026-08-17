@@ -1,0 +1,6 @@
+{
+  "id": "golden-execution",
+  "version": "0.1.0",
+  "description": "Persisted GPT-5.6-sol refinement, independent verification, and review-batch assembly",
+  "entrypoint": "plugin.py"
+}

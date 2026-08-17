@@ -1,0 +1,6 @@
+{
+  "id": "review-assembly",
+  "version": "0.1.0",
+  "description": "Repair-safe review assembly from completed golden-conversation decisions",
+  "entrypoint": "plugin.py"
+}

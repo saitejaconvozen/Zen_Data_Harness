@@ -1,0 +1,22 @@
+[project]
+name = "zen-agent-harness"
+instruction_file = "ZEN.md"
+
+[runtime]
+state_directory = ".zen"
+max_tasks_per_run = 100
+max_attempts_per_task = 2
+max_tool_calls_per_run = 200
+
+[models]
+execution_adapter = "codex_exec"
+allowed = ["gpt-5.6-sol"]
+default = "gpt-5.6-sol"
+
+[plugins]
+paths = ["plugins"]
+
+[policy]
+default_tool_effect = "deny"
+allowed_risks = ["read_only", "workspace_write"]
+approval_risks = ["external_write", "production_write", "destructive"]

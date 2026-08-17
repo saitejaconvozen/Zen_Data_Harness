@@ -1,0 +1,6 @@
+{
+  "id": "csv-profile",
+  "version": "1.0.0",
+  "description": "Generic fixture plugin proving kernel independence",
+  "entrypoint": "plugin.py"
+}

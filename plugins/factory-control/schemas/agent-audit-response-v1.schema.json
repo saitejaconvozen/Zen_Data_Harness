@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "packet_id", "worker", "decision"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["zen.agent-audit-decision/1"]},
+    "packet_id": {"type": "string", "pattern": "^rp_[0-9a-f]{64}$"},
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "model_id", "session_id"],
+      "properties": {
+        "role": {"type": "string", "enum": ["AGENT_AUDITOR"]},
+        "model_id": {"type": "string", "enum": ["gpt-5.6-sol"]},
+        "session_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "prompt_coherent", "workflow_obeyed", "conversation_usable", "critical_failures", "findings", "missing_evidence"],
+      "properties": {
+        "verdict": {"type": "string", "enum": ["PASS", "FAIL", "QUARANTINE"]},
+        "prompt_coherent": {"type": "boolean"},
+        "workflow_obeyed": {"type": ["boolean", "null"]},
+        "conversation_usable": {"type": "boolean"},
+        "critical_failures": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["turn_id", "severity", "category", "evidence", "expected_behavior"],
+            "properties": {
+              "turn_id": {"type": ["string", "null"]},
+              "severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR"]},
+              "category": {"type": "string", "minLength": 1},
+              "evidence": {"type": "string", "minLength": 1},
+              "expected_behavior": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "missing_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  }
+}

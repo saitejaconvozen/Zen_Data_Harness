@@ -1,0 +1,4 @@
+interface:
+  display_name: "Operate Data Engine"
+  short_description: "Run governed and auditable data-engine jobs"
+  default_prompt: "Use $operate-data-engine to plan and execute this governed data-engine objective."

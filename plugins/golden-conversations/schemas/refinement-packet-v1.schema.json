@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zen.refinement-packet/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "packet_id", "source", "taxonomy", "prompts", "schemas", "system_prompt", "turns", "user_turn_sha256", "assistant_turn_count", "status"],
+  "properties": {
+    "schema_version": {"const": "zen.refinement-packet/1"},
+    "packet_id": {"type": "string", "pattern": "^rp_[0-9a-f]{64}$"},
+    "source": {"type": "object"},
+    "taxonomy": {"type": "object"},
+    "prompts": {"type": "object"},
+    "schemas": {"type": "object"},
+    "system_prompt": {"type": "string", "minLength": 1},
+    "turns": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "user_turn_sha256": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "assistant_turn_count": {"type": "integer", "minimum": 1},
+    "status": {"const": "READY_FOR_AGENT_AUDIT"}
+  }
+}

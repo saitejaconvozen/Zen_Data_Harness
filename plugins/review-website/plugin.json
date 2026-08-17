@@ -1,0 +1,6 @@
+{
+  "id": "review-website",
+  "version": "0.1.0",
+  "description": "Build and locally host a protected website for verified golden-conversation candidates",
+  "entrypoint": "plugin.py"
+}

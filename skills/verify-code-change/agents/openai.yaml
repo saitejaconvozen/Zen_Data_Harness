@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Code Change"
+  short_description: "Independently verify a code change against its objective"
+  default_prompt: "Use $verify-code-change to independently inspect and verify this completed change."

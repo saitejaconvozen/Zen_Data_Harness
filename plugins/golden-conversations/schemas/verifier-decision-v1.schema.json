@@ -1,0 +1,144 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "zen.verifier-decision/1",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "decision_id",
+  "packet_id",
+  "assignment_id",
+  "worker",
+  "decision"
+ ],
+ "properties": {
+  "schema_version": {
+   "const": "zen.review-decision/1"
+  },
+  "decision_id": {
+   "type": "string",
+   "pattern": "^rd_[0-9a-f]{64}$"
+  },
+  "packet_id": {
+   "type": "string",
+   "pattern": "^rp_[0-9a-f]{64}$"
+  },
+  "assignment_id": {
+   "type": "string",
+   "pattern": "^asg_[0-9a-f]{64}$"
+  },
+  "worker": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "principal_id",
+    "session_id",
+    "role",
+    "model_id"
+   ],
+   "properties": {
+    "principal_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "session_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "role": {
+     "const": "VERIFIER"
+    },
+    "model_id": {
+     "const": "gpt-5.6-sol"
+    }
+   }
+  },
+  "decision": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "decision",
+    "user_turns_unchanged",
+    "assistant_turns_all_acceptable",
+    "annotations_complete",
+    "replay_required",
+    "findings"
+   ],
+   "properties": {
+    "decision": {
+     "enum": [
+      "PASS",
+      "FAIL",
+      "ABSTAIN"
+     ]
+    },
+    "user_turns_unchanged": {
+     "type": "boolean"
+    },
+    "assistant_turns_all_acceptable": {
+     "type": "boolean"
+    },
+    "annotations_complete": {
+     "type": "boolean"
+    },
+    "replay_required": {
+     "type": "boolean"
+    },
+    "findings": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "turn_id",
+       "variant_id",
+       "severity",
+       "reason",
+       "suggested_fix",
+       "scope"
+      ],
+      "properties": {
+       "turn_id": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "minLength": 1
+       },
+       "variant_id": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "minLength": 1
+       },
+       "severity": {
+        "enum": [
+         "CRITICAL",
+         "MAJOR",
+         "MINOR"
+        ]
+       },
+       "reason": {
+        "type": "string",
+        "minLength": 1
+       },
+       "suggested_fix": {
+        "type": "string",
+        "minLength": 1
+       },
+       "scope": {
+        "enum": [
+         "GOLDEN_TEXT",
+         "ANNOTATION",
+         "TURN_LABEL"
+        ],
+        "description": "What the finding is about. GOLDEN_TEXT = the assistant response is wrong and must be rewritten. ANNOTATION = the taxonomy citation is imprecise. TURN_LABEL = a per-turn field is mislabelled. Only GOLDEN_TEXT findings require rewriting the conversation."
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

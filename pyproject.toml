@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zen-agent-harness"
+version = "0.1.0"
+description = "Auditable, resumable agent runtime for governed data-engine jobs"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+zen = "zen_agent.cli:main"
+zen-graph = "zen_agent.graph_cli:main"
+zen-factory = "zen_agent.factory_cli:main"
+zen-factory-operate = "zen_agent.factory_operator_cli:main"
+zen-factory-run = "zen_agent.factory_run_cli:main"
+zen-factory-drain = "zen_agent.factory_drain_cli:main"
+zen-factory-refine = "zen_agent.factory_refinement_cli:main"
+zen-factory-review = "zen_agent.factory_review:main"
+zen-factory-autopilot = "zen_agent.factory_autopilot_cli:main"
+zen-factory-progress = "zen_agent.factory_progress_cli:main"
+zen-factory-status = "zen_agent.status_server:main"
+zen-factory-audit = "zen_agent.qa_audit_cli:main"
+zen-factory-self-improve = "zen_agent.self_improve_cli:main"
+zen-improve = "zen_agent.improvement_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.unittest]
+start-directory = "tests"

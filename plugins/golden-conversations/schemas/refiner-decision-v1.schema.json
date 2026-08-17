@@ -1,0 +1,386 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "zen.refiner-decision/1",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "decision_id",
+  "packet_id",
+  "assignment_id",
+  "worker",
+  "decision"
+ ],
+ "properties": {
+  "schema_version": {
+   "const": "zen.review-decision/1"
+  },
+  "decision_id": {
+   "type": "string",
+   "pattern": "^rd_[0-9a-f]{64}$"
+  },
+  "packet_id": {
+   "type": "string",
+   "pattern": "^rp_[0-9a-f]{64}$"
+  },
+  "assignment_id": {
+   "type": "string",
+   "pattern": "^asg_[0-9a-f]{64}$"
+  },
+  "worker": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "principal_id",
+    "session_id",
+    "role",
+    "model_id"
+   ],
+   "properties": {
+    "principal_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "session_id": {
+     "type": "string",
+     "minLength": 1
+    },
+    "role": {
+     "const": "REFINER"
+    },
+    "model_id": {
+     "const": "gpt-5.6-sol"
+    }
+   }
+  },
+  "decision": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "prompt_usable",
+    "prompt_issues",
+    "classification",
+    "replay_required",
+    "replay_from_turn_id",
+    "quarantine_reasons",
+    "assistant_turns",
+    "conversation_assessable"
+   ],
+   "properties": {
+    "prompt_usable": {
+     "type": "boolean"
+    },
+    "prompt_issues": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1
+     }
+    },
+    "classification": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "domain",
+      "primary_language",
+      "other_languages",
+      "code_switching"
+     ],
+     "properties": {
+      "domain": {
+       "type": "string",
+       "minLength": 1
+      },
+      "primary_language": {
+       "type": "string",
+       "minLength": 1
+      },
+      "other_languages": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "minLength": 1
+       }
+      },
+      "code_switching": {
+       "type": "boolean"
+      }
+     }
+    },
+    "replay_required": {
+     "type": "boolean",
+     "description": "DERIVED: true when any assistant turn is DIVERGENT. Not a veto."
+    },
+    "replay_from_turn_id": {
+     "type": [
+      "string",
+      "null"
+     ],
+     "minLength": 1
+    },
+    "quarantine_reasons": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "minLength": 1
+     },
+     "description": "Advisory prose only. Never the sole basis for discarding a conversation; turn-scoped concerns belong on the turn."
+    },
+    "assistant_turns": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "turn_id",
+       "action",
+       "golden_text",
+       "semantic_delta",
+       "source_quality",
+       "downstream_coherence",
+       "divergence_reason",
+       "correction_reason",
+       "annotations",
+       "evidence_status",
+       "response_language",
+       "golden_tool_calls"
+      ],
+      "properties": {
+       "turn_id": {
+        "type": "string",
+        "minLength": 1
+       },
+       "action": {
+        "enum": [
+         "KEEP",
+         "REPLACE"
+        ]
+       },
+       "golden_text": {
+        "type": "string",
+        "description": "The turn's spoken text. Empty string when the turn only calls a tool."
+       },
+       "semantic_delta": {
+        "enum": [
+         "NONE",
+         "STYLE_ONLY",
+         "DIALOGUE_ACT",
+         "FACT",
+         "TOOL_ACTION",
+         "WORKFLOW_STATE"
+        ]
+       },
+       "correction_reason": {
+        "type": "string"
+       },
+       "annotations": {
+        "type": "array",
+        "minItems": 0,
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "axis_id",
+          "subaxis_id",
+          "variant_id",
+          "applicability",
+          "source_verdict",
+          "golden_verdict",
+          "severity",
+          "scope",
+          "trigger_turn_ids",
+          "evidence_turn_ids",
+          "evidence_quote",
+          "expected_behavior",
+          "observed_behavior",
+          "confidence",
+          "missing_evidence"
+         ],
+         "properties": {
+          "axis_id": {
+           "type": "string",
+           "minLength": 1
+          },
+          "subaxis_id": {
+           "type": "string",
+           "minLength": 1
+          },
+          "variant_id": {
+           "type": "string",
+           "minLength": 1
+          },
+          "applicability": {
+           "enum": [
+            "APPLICABLE",
+            "UNASSESSABLE"
+           ]
+          },
+          "source_verdict": {
+           "enum": [
+            "PASS",
+            "FAIL",
+            null
+           ]
+          },
+          "golden_verdict": {
+           "enum": [
+            "PASS",
+            null
+           ]
+          },
+          "severity": {
+           "enum": [
+            "CRITICAL",
+            "MAJOR",
+            "MINOR",
+            null
+           ]
+          },
+          "scope": {
+           "enum": [
+            "TURN",
+            "MULTITURN"
+           ]
+          },
+          "trigger_turn_ids": {
+           "type": "array",
+           "items": {
+            "type": "string",
+            "minLength": 1
+           }
+          },
+          "evidence_turn_ids": {
+           "type": "array",
+           "items": {
+            "type": "string",
+            "minLength": 1
+           }
+          },
+          "evidence_quote": {
+           "type": "string"
+          },
+          "expected_behavior": {
+           "type": "string"
+          },
+          "observed_behavior": {
+           "type": "string"
+          },
+          "confidence": {
+           "type": "number",
+           "minimum": 0,
+           "maximum": 1
+          },
+          "missing_evidence": {
+           "type": "array",
+           "items": {
+            "type": "string",
+            "minLength": 1
+           }
+          }
+         }
+        }
+       },
+       "downstream_coherence": {
+        "enum": [
+         "TERMINAL_TURN",
+         "PRESERVED",
+         "DIVERGENT"
+        ],
+        "description": "Whether the observed next user turn remains a natural reply to golden_text. TERMINAL_TURN when no user turn follows."
+       },
+       "source_quality": {
+        "enum": [
+         "PERFECT",
+         "MINOR_GAP",
+         "MAJOR_GAP",
+         "CRITICAL_GAP"
+        ],
+        "description": "How far the source assistant turn was from the ideal response given prior context."
+       },
+       "divergence_reason": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "golden_text_final": {
+        "type": "string",
+        "minLength": 1,
+        "description": "HARNESS-WRITTEN: golden_text with mandatory language tag applied."
+       },
+       "language_tag_applied": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "description": "HARNESS-WRITTEN: language tag the harness prepended, if any."
+       },
+       "evidence_status": {
+        "enum": [
+         "SUFFICIENT",
+         "INSUFFICIENT"
+        ],
+        "description": "INSUFFICIENT when required audio/backend/tool evidence makes THIS turn unassessable. Excludes the turn, not the conversation."
+       },
+       "response_language": {
+        "type": "string",
+        "minLength": 2,
+        "description": "Language of golden_text as a tag name the system prompt declares (e.g. ENGLISH, HINDI). Authoritative: the harness applies this tag. Romanised Hindi is HINDI, not ENGLISH."
+       },
+       "golden_tool_calls": {
+        "anyOf": [
+         {
+          "type": "array",
+          "description": "HARNESS-RELEVANT: the corrected tool invocations for this turn. Omit or leave null when the turn makes no tool call.",
+          "items": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "id",
+            "type",
+            "function"
+           ],
+           "properties": {
+            "id": {
+             "type": "string"
+            },
+            "type": {
+             "type": "string"
+            },
+            "function": {
+             "type": "object",
+             "additionalProperties": false,
+             "required": [
+              "name",
+              "arguments"
+             ],
+             "properties": {
+              "name": {
+               "type": "string"
+              },
+              "arguments": {
+               "type": "string",
+               "description": "JSON-encoded arguments"
+              }
+             }
+            }
+           }
+          }
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Corrected tool calls for this turn, or null when the turn calls no tool."
+       }
+      }
+     }
+    },
+    "conversation_assessable": {
+     "type": "boolean",
+     "description": "False only when a whole-conversation blocker makes every turn unassessable. Turn-scoped gaps belong on the turn."
+    }
+   }
+  }
+ }
+}

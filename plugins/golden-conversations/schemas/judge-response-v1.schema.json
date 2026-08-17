@@ -1,0 +1,140 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "worker",
+  "judgement"
+ ],
+ "properties": {
+  "schema_version": {
+   "type": "string",
+   "enum": [
+    "zen.refinement-judgement/1"
+   ]
+  },
+  "worker": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "role",
+    "model_id",
+    "session_id"
+   ],
+   "properties": {
+    "role": {
+     "type": "string",
+     "enum": [
+      "JUDGE"
+     ]
+    },
+    "model_id": {
+     "type": "string",
+     "enum": [
+      "gpt-5.6-sol"
+     ]
+    },
+    "session_id": {
+     "type": "string"
+    }
+   }
+  },
+  "judgement": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "conversation_verdict",
+    "summary",
+    "turns"
+   ],
+   "properties": {
+    "conversation_verdict": {
+     "type": "string",
+     "enum": [
+      "USE",
+      "REVIEW",
+      "REJECT"
+     ]
+    },
+    "summary": {
+     "type": "string"
+    },
+    "turns": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "turn_id",
+       "verdict",
+       "reason",
+       "evidence_quote",
+       "what_was_lost",
+       "what_was_invented",
+       "next_user_turn_still_fits",
+       "tool_call_verdict",
+       "tool_call_reason"
+      ],
+      "properties": {
+       "turn_id": {
+        "type": "string"
+       },
+       "verdict": {
+        "type": "string",
+        "enum": [
+         "IMPROVED",
+         "UNNECESSARY",
+         "HARMFUL",
+         "UNCERTAIN"
+        ]
+       },
+       "reason": {
+        "type": "string"
+       },
+       "evidence_quote": {
+        "type": "string"
+       },
+       "what_was_lost": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "what_was_invented": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "next_user_turn_still_fits": {
+        "type": [
+         "boolean",
+         "null"
+        ]
+       },
+       "tool_call_verdict": {
+        "type": "string",
+        "enum": [
+         "NO_TOOL_CALL",
+         "PRESERVED",
+         "CORRECTED",
+         "FABRICATED",
+         "REMOVED_WRONGLY",
+         "UNCERTAIN"
+        ],
+        "description": "How the edit treated this turn's tool calls. FABRICATED = a call was added that the agent never made."
+       },
+       "tool_call_reason": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

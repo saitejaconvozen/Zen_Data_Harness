@@ -1,0 +1,19 @@
+.zen/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Runtime state, credentials, and RESTRICTED_SOURCE_NOT_DEIDENTIFIED transcripts
+# all live under .zen/ (excluded above). These are belt-and-braces.
+*.env
+*.token
+.zen/factory.env
+.zen/status-token.txt
+*.orig
+*.log
+
+# downloaded binary, not source
+bin/cloudflared

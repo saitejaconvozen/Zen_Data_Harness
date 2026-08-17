@@ -1,0 +1,4 @@
+interface:
+  display_name: "Improve Data Engine"
+  short_description: "Run governed evidence-based improvement loops"
+  default_prompt: "Use $improve-data-engine to analyze failures, propose a bounded improvement, evaluate it on held-out data, and prepare it for human promotion."

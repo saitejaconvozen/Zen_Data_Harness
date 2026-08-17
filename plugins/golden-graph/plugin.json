@@ -1,0 +1,6 @@
+{
+  "id": "golden-graph",
+  "version": "0.1.0",
+  "description": "Parallel, bounded GPT-5.6-sol repair, trajectory-gating, and independent re-verification graph",
+  "entrypoint": "plugin.py"
+}

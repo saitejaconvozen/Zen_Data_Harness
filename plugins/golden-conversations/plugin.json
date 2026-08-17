@@ -1,0 +1,6 @@
+{
+  "id": "golden-conversations",
+  "version": "0.1.0",
+  "description": "Governed golden-conversation corpus plugin",
+  "entrypoint": "plugin.py"
+}

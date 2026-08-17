@@ -1,0 +1,4 @@
+interface:
+  display_name: "Execute Coding Task"
+  short_description: "Safely inspect, edit, test, and verify a workspace"
+  default_prompt: "Use $execute-coding-task to complete this repository task through Zen-owned tools and verification."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate Data Factory"
+  short_description: "Run sharded conversation curation safely"
+  default_prompt: "Use $orchestrate-data-factory to plan and operate a resumable 5,000-conversation curation run."

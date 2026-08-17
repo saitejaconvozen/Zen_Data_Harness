@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refine Golden Conversations"
+  short_description: "Refine assistant turns for golden corpora"
+  default_prompt: "Use $refine-golden-conversations to prepare verified assistant-only golden conversation revisions."
