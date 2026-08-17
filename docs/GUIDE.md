@@ -295,21 +295,21 @@ conversations, with a durable ledger so batches advance.
 
 ```bash
 # one-time
-python -m venv .venv && .venv/bin/pip install -e .
+python -m venv zen-harness && zen-harness/bin/pip install -e .
 echo "export MONGODB_URI='mongodb://…'" > .zen/factory.env && chmod 600 .zen/factory.env
 
 # build an agent shortlist
-.venv/bin/python -m zen_agent.cli run "shortlist agents" --input max_agents=4000
+zen-harness/bin/python -m zen_agent.cli run "shortlist agents" --input max_agents=4000
 
 # create and run a batch
-.venv/bin/zen-factory create --target 500          # prints a run_id
+zen-harness/bin/zen-factory create --target 500          # prints a run_id
 scripts/factory-tmux.sh start  <run_id>
 scripts/factory-tmux.sh ui     <run_id> 8899
 scripts/factory-tmux.sh status
 
 # quality
-.venv/bin/zen-factory-audit <run_id> --judge
-.venv/bin/zen-factory-audit <run_id> --full --judge   # sweep everything
+zen-harness/bin/zen-factory-audit <run_id> --judge
+zen-harness/bin/zen-factory-audit <run_id> --full --judge   # sweep everything
 ```
 
 `scripts/factory-watch.sh` runs continuously: logs progress, auto-runs the audit
@@ -366,7 +366,7 @@ nullable types for optional fields.
 ## 8. Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -q
+zen-harness/bin/python -m unittest discover -s tests -q
 ```
 
 215 tests. Notable ones and the incident behind each:

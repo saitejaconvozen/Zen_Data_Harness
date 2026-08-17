@@ -14,6 +14,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=_env.sh
+source "$ROOT/scripts/_env.sh"
 SESSION="${ZEN_TMUX_SESSION:-zen-factory}"
 UI_SESSION="${ZEN_UI_SESSION:-zen-status}"
 
@@ -31,12 +33,12 @@ start)
     # so "session exists" is not evidence the run actually started.
     # Exit code 2 from the progress CLI means "dead work exists", not "unknown
     # run", so membership in --list is the only correct existence check.
-    if ! .venv/bin/zen-factory-progress --list 2>/dev/null | grep -qx "  $RUN_ID"; then
+    if ! "$ZEN_BIN"/zen-factory-progress --list 2>/dev/null | grep -qx "  $RUN_ID"; then
         echo "Unknown run_id: $RUN_ID" >&2
         echo >&2
-        .venv/bin/zen-factory-progress --list >&2 || true
+        "$ZEN_BIN"/zen-factory-progress --list >&2 || true
         echo >&2
-        echo "Create one with: .venv/bin/zen-factory create --target 1000" >&2
+        echo "Create one with: ${ZEN_BIN}/zen-factory create --target 1000" >&2
         exit 64
     fi
     if tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -76,14 +78,14 @@ ui)
     PORT="${2:-8899}"
     # Exit code 2 from the progress CLI means "dead work exists", not "unknown
     # run", so membership in --list is the only correct existence check.
-    if ! .venv/bin/zen-factory-progress --list 2>/dev/null | grep -qx "  $RUN_ID"; then
+    if ! "$ZEN_BIN"/zen-factory-progress --list 2>/dev/null | grep -qx "  $RUN_ID"; then
         echo "Unknown run_id: $RUN_ID" >&2
-        .venv/bin/zen-factory-progress --list >&2 || true
+        "$ZEN_BIN"/zen-factory-progress --list >&2 || true
         exit 64
     fi
     tmux kill-session -t "$UI_SESSION" 2>/dev/null || true
     tmux new-session -d -s "$UI_SESSION" -c "$ROOT" \
-        ".venv/bin/zen-factory-status $RUN_ID --port $PORT"
+        "${ZEN_BIN}/zen-factory-status $RUN_ID --port $PORT"
     tmux set-option -t "$UI_SESSION" remain-on-exit on >/dev/null
     for _ in $(seq 1 15); do
         if curl -sf -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/"; then

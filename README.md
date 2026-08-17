@@ -16,16 +16,39 @@ to a different dataset.
 
 ## Quick start
 
-Python 3.11 or newer:
+Python 3.11 or newer. Create an environment called `zen-harness`:
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -e .
+python -m venv zen-harness
+zen-harness/bin/pip install -e .
 
 # credentials live outside version control
 mkdir -p .zen && echo "export MONGODB_URI='mongodb://…'" > .zen/factory.env
 chmod 600 .zen/factory.env
 
-.venv/bin/python -m zen_agent.cli plugins
+zen-harness/bin/python -m zen_agent.cli plugins
+```
+
+<details>
+<summary>Using conda instead</summary>
+
+```bash
+conda create -n zen-harness python=3.12 -y
+conda activate zen-harness
+pip install -e .
+```
+
+With the env activated, drop the `zen-harness/bin/` prefix from every command
+below — the `zen-*` console scripts are on your `PATH`.
+</details>
+
+The shell scripts locate the environment themselves, in this order:
+`$ZEN_BIN` → `./zen-harness/bin` → `./.venv/bin` → an activated conda/virtualenv
+→ `PATH`. So an existing `.venv` keeps working, and any other layout is one
+variable away:
+
+```bash
+export ZEN_BIN=/path/to/your/env/bin
 ```
 
 ## Run a data batch end to end
@@ -37,10 +60,10 @@ continues from the durable queue.
 
 ```bash
 # build an agent shortlist (once)
-.venv/bin/python -m zen_agent.cli run "shortlist agents" --input max_agents=4000
+zen-harness/bin/python -m zen_agent.cli run "shortlist agents" --input max_agents=4000
 
 # create a run, then drive it
-.venv/bin/zen-factory create --target 500        # prints a run_id
+zen-harness/bin/zen-factory create --target 500        # prints a run_id
 scripts/factory-tmux.sh start  <run_id>          # supervised, auto-restarting
 scripts/factory-tmux.sh ui     <run_id> 8899     # dashboard + conversation browser
 scripts/factory-tmux.sh status
@@ -58,8 +81,8 @@ never blocks waiting on a reviewer.
 Two independent layers, because each catches what the other cannot.
 
 ```bash
-.venv/bin/zen-factory-audit <run_id> --judge           # sample 20% of each batch of 50
-.venv/bin/zen-factory-audit <run_id> --full --judge    # sweep every candidate
+zen-harness/bin/zen-factory-audit <run_id> --judge           # sample 20% of each batch of 50
+zen-harness/bin/zen-factory-audit <run_id> --full --judge    # sweep every candidate
 ```
 
 **Deterministic checks** run in Python and cannot be argued with: a replacement
@@ -96,7 +119,7 @@ fresh context, and is willing to say the pipeline did badly.
 ## Testing
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -q
+zen-harness/bin/python -m unittest discover -s tests -q
 ```
 
 See also `docs/architecture/RFC-0004-autonomous-coding-kernel.md` and

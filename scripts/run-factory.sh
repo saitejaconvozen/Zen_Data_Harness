@@ -11,6 +11,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=_env.sh
+source "$ROOT/scripts/_env.sh"
 
 if [[ $# -lt 1 ]]; then
     echo "usage: $0 RUN_ID [zen-factory-run flags...]" >&2
@@ -36,18 +38,18 @@ if [[ -z "$INVENTORY" ]]; then
 fi
 if [[ -z "$INVENTORY" || ! -f "$INVENTORY" ]]; then
     echo "No agent inventory artifact found. Build one first:" >&2
-    echo "  .venv/bin/python -m zen_agent.cli run 'shortlist agents' --input max_agents=4000" >&2
+    echo "  ${ZEN_BIN}/python -m zen_agent.cli run 'shortlist agents' --input max_agents=4000" >&2
     exit 66
 fi
 
 # Fail loudly on a placeholder or typo instead of running against nothing.
 # Exit code 2 from the progress CLI means "dead work exists", not "unknown
     # run", so membership in --list is the only correct existence check.
-    if ! .venv/bin/zen-factory-progress --list 2>/dev/null | grep -qx "  $RUN_ID"; then
+    if ! "$ZEN_BIN"/zen-factory-progress --list 2>/dev/null | grep -qx "  $RUN_ID"; then
     echo "Unknown run_id: $RUN_ID" >&2
-    .venv/bin/zen-factory-progress --list >&2 || true
+    "$ZEN_BIN"/zen-factory-progress --list >&2 || true
     echo >&2
-    echo "Create one with: .venv/bin/zen-factory create --target 1000" >&2
+    echo "Create one with: ${ZEN_BIN}/zen-factory create --target 1000" >&2
     exit 64
 fi
 
@@ -95,7 +97,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
         sleep 5
     fi
     set +e
-    .venv/bin/zen-factory-run "$RUN_ID" \
+    "$ZEN_BIN"/zen-factory-run "$RUN_ID" \
     --inventory-artifact "$INVENTORY" \
     --site "$SITE" \
     --workers 16 \

@@ -12,6 +12,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=_env.sh
+source "$ROOT/scripts/_env.sh"
 
 RUN_ID="${1:-}"
 INTERVAL="${2:-300}"
@@ -72,7 +74,7 @@ while true; do
     last_terminal=$terminal
 
     # Audit each new batch of 50 approved conversations without being asked.
-    audit=$(.venv/bin/zen-factory-audit "$RUN_ID" --all-batches --judge --judge-workers 6 2>&1)
+    audit=$("$ZEN_BIN"/zen-factory-audit "$RUN_ID" --all-batches --judge --judge-workers 6 2>&1)
     if ! grep -q "No full batch" <<<"$audit"; then
         say "QA audit ran:"
         printf '%s\n' "$audit" | tail -30 | tee -a "$LOG"
