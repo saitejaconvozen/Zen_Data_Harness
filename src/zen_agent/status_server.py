@@ -862,7 +862,7 @@ def main(argv: list[str] | None = None) -> int:
                         "by_role": store.by_role(wanted),
                         "failures": store.failure_reasons(wanted),
                         "throughput": store.throughput(wanted),
-                        "economics": store.cost_per_conversation(wanted),
+                        "workload": store.calls_per_conversation(wanted),
                     }
                 finally:
                     store.close()

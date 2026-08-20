@@ -33,6 +33,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import traceback
 import sys
 import tempfile
 from typing import Any
@@ -104,12 +105,18 @@ def _record_metrics(role: str, output_path: Path, latency_ms: int,
             sys.path.insert(0, str(root / "src"))
         from zen_agent.observability import CallRecord, MetricsStore
 
+        # Roles write under two different roots: the auditor to
+        # .zen/factory-jobs/<run>/<packet>/, everyone else to .zen/jobs/<run>/
+        # <packet>/. Parsing only the first left 1,352 calls with no run
+        # attribution, so `zen-observe <run>` reported a busy pipeline as idle.
         parts = output_path.resolve().parts
         run_id = packet_id = ""
-        if "factory-jobs" in parts:
-            index = parts.index("factory-jobs")
-            run_id = parts[index + 1] if len(parts) > index + 1 else ""
-            packet_id = parts[index + 2] if len(parts) > index + 2 else ""
+        for job_root in ("factory-jobs", "jobs"):
+            if job_root in parts:
+                index = parts.index(job_root)
+                run_id = parts[index + 1] if len(parts) > index + 1 else ""
+                packet_id = parts[index + 2] if len(parts) > index + 2 else ""
+                break
         store = MetricsStore(root / ".zen" / "metrics.db")
         try:
             store.record(CallRecord(
@@ -120,14 +127,24 @@ def _record_metrics(role: str, output_path: Path, latency_ms: int,
                 input_tokens=int(_LAST_USAGE.get("input_tokens") or 0),
                 output_tokens=int(_LAST_USAGE.get("output_tokens") or 0),
                 reasoning_tokens=int(_LAST_USAGE.get("reasoning_tokens") or 0),
-                cost_usd=float(_LAST_USAGE.get("cost_usd") or 0.0),
                 reasoning_effort=reasoning_effort(role),
                 outcome=outcome, error_class=error_class,
             ))
         finally:
             store.close()
     except Exception:
-        pass
+        # Instrumentation must never fail the work it measures — but a silent
+        # instrument is worse than none: it reports a busy pipeline as idle.
+        # A loop variable shadowing `root` broke every write here, invisibly.
+        if os.environ.get("ZEN_METRICS_STRICT", "").strip() in {"1", "true", "yes"}:
+            raise
+        try:
+            logs = Path(__file__).resolve().parents[3] / ".zen" / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            with (logs / "metrics-errors.log").open("a", encoding="utf-8") as handle:
+                handle.write(f"{time.time()} {role}\n{traceback.format_exc()}\n")
+        except OSError:
+            pass
 
 
 def provider() -> str:
@@ -367,11 +384,7 @@ def _run_litellm(
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                # LiteLLM reports per-call spend in a header, not the body.
-                header_cost = response.headers.get("x-litellm-response-cost")
                 payload = json.loads(response.read().decode("utf-8"))
-            if header_cost:
-                payload.setdefault("_hidden_params", {})["response_cost"] = header_cost
         except urllib.error.HTTPError as exc:
             last_error = f"HTTP {exc.code}: {exc.read()[:800].decode('utf-8', 'replace')}"
             log.append(f"--- attempt {attempt} --- {last_error}")
@@ -385,11 +398,6 @@ def _run_litellm(
             "output_tokens": int(usage.get("completion_tokens") or 0),
             "reasoning_tokens": int(
                 (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
-            ),
-            # LiteLLM computes spend per call from the upstream's own pricing;
-            # taking it from the response beats maintaining a price table here.
-            "cost_usd": float(
-                (payload.get("_hidden_params") or {}).get("response_cost") or 0.0
             ),
             "attempts": attempt,
         })

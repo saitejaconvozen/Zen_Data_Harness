@@ -41,6 +41,10 @@ app.use(
   })
 );
 
+// Standalone pages that are not part of the SPA — served before the fallback
+// so they render as themselves rather than the app shell.
+app.use(express.static(path.join(here, "..", "static"), { maxAge: "5m" }));
+
 const dist = path.join(here, "..", "dist");
 app.use(express.static(dist, { maxAge: "1h", index: false }));
 // SPA fallback: every non-API path renders the app and lets the router decide.

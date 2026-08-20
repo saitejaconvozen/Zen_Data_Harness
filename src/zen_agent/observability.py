@@ -1,17 +1,17 @@
-"""Record what every model call actually cost and how long it took.
+"""Record what every model call did and how long it took.
 
-The queue records *whether* work finished. It says nothing about what the work
-cost, how long each role took, how often a model had to be retried, or which
-stage is consuming the budget. That gap has already been expensive twice:
+The queue records *whether* work finished. It says nothing about how many model
+calls each role took, how long they ran, how often a model had to be retried, or
+which stage is consuming the work. That gap has bitten twice:
 
-* 63% of one run's inference spend went to repair loops, and nobody knew until
-  it was measured by hand, after the credits had run out.
+* 63% of one run's model calls went to repair loops, and nobody knew until it
+  was counted by hand.
 * A crash-looping driver restarted every 13 seconds for an hour while the
   supervisor reported it as healthy, because "restarted" and "made progress"
   were never distinguished.
 
 So this module records one row per model call — role, model, latency, tokens,
-cost, retries, outcome — in its own database. Its own, deliberately: the queue
+retries, outcome — in its own database. Its own, deliberately: the queue
 is on the hot write path with dozens of workers contending, and observability
 must never be able to slow down or block the thing it observes.
 
@@ -43,7 +43,6 @@ class CallRecord:
     input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
-    cost_usd: float = 0.0
     reasoning_effort: str = ""
     outcome: str = "SUCCEEDED"
     error_class: str = ""
@@ -78,7 +77,6 @@ class MetricsStore:
               input_tokens INTEGER NOT NULL DEFAULT 0,
               output_tokens INTEGER NOT NULL DEFAULT 0,
               reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-              cost_usd REAL NOT NULL DEFAULT 0,
               reasoning_effort TEXT NOT NULL DEFAULT '',
               outcome TEXT NOT NULL DEFAULT 'SUCCEEDED',
               error_class TEXT NOT NULL DEFAULT '',
@@ -100,13 +98,13 @@ class MetricsStore:
             self.db.execute(
                 """INSERT INTO model_calls
                 (run_id, stage, role, provider, model, packet_id, latency_ms,
-                 attempts, input_tokens, output_tokens, reasoning_tokens, cost_usd,
+                 attempts, input_tokens, output_tokens, reasoning_tokens,
                  reasoning_effort, outcome, error_class, started_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     call.run_id, call.stage, call.role, call.provider, call.model,
                     call.packet_id, call.latency_ms, call.attempts, call.input_tokens,
-                    call.output_tokens, call.reasoning_tokens, call.cost_usd,
+                    call.output_tokens, call.reasoning_tokens,
                     call.reasoning_effort, call.outcome, call.error_class,
                     call.started_at,
                 ),
@@ -118,7 +116,7 @@ class MetricsStore:
     # ---- reporting -------------------------------------------------------
 
     def by_role(self, run_id: str | None = None) -> list[dict[str, Any]]:
-        """Where the time and money actually went, per role."""
+        """Where the calls and the time actually went, per role."""
         where, params = ("WHERE run_id=?", (run_id,)) if run_id else ("", ())
         rows = self.db.execute(
             f"""SELECT role, model,
@@ -128,10 +126,9 @@ class MetricsStore:
                        ROUND(AVG(latency_ms)) AS mean_ms,
                        MAX(latency_ms) AS max_ms,
                        SUM(input_tokens) AS input_tokens,
-                       SUM(output_tokens) AS output_tokens,
-                       ROUND(SUM(cost_usd), 4) AS cost_usd
+                       SUM(output_tokens) AS output_tokens
                 FROM model_calls {where}
-                GROUP BY role, model ORDER BY cost_usd DESC, calls DESC""",
+                GROUP BY role, model ORDER BY calls DESC""",
             params,
         ).fetchall()
         return [dict(row) for row in rows]
@@ -142,7 +139,6 @@ class MetricsStore:
             f"""SELECT COUNT(*) AS calls,
                        SUM(outcome != 'SUCCEEDED') AS failures,
                        SUM(input_tokens + output_tokens) AS tokens,
-                       ROUND(SUM(cost_usd), 4) AS cost_usd,
                        MIN(started_at) AS first_at, MAX(started_at) AS last_at
                 FROM model_calls {where}""",
             params,
@@ -153,8 +149,7 @@ class MetricsStore:
         """Recent call rate — the number that distinguishes 'running' from 'stuck'."""
         since = time.time() - window_seconds
         row = self.db.execute(
-            """SELECT COUNT(*) AS calls, SUM(outcome != 'SUCCEEDED') AS failures,
-                      ROUND(SUM(cost_usd), 4) AS cost_usd
+            """SELECT COUNT(*) AS calls, SUM(outcome != 'SUCCEEDED') AS failures
                FROM model_calls WHERE run_id=? AND started_at > ?""",
             (run_id, since),
         ).fetchone()
@@ -174,23 +169,22 @@ class MetricsStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def cost_per_conversation(self, run_id: str) -> dict[str, Any]:
-        """Total spend divided by conversations that reached a decision.
+    def calls_per_conversation(self, run_id: str) -> dict[str, Any]:
+        """Model calls divided by conversations that reached a decision.
 
-        The number that answers "can I afford the next batch?", which neither
-        the queue nor a provider invoice can answer on its own.
+        The number that answers "how much work does one conversation take?",
+        which the queue cannot answer because it counts items, not calls.
         """
         row = self.db.execute(
-            """SELECT ROUND(SUM(cost_usd), 4) AS cost,
-                      COUNT(DISTINCT packet_id) AS packets
+            """SELECT COUNT(*) AS calls, COUNT(DISTINCT packet_id) AS packets
                FROM model_calls WHERE run_id=? AND packet_id != ''""",
             (run_id,),
         ).fetchone()
-        cost = (row["cost"] or 0.0) if row else 0.0
+        calls = (row["calls"] or 0) if row else 0
         packets = (row["packets"] or 0) if row else 0
         return {
-            "cost_usd": cost,
+            "calls": calls,
             "conversations": packets,
-            "cost_per_conversation": round(cost / packets, 5) if packets else None,
-            "projected_10k_usd": round(cost / packets * 10_000, 2) if packets else None,
+            "calls_per_conversation": round(calls / packets, 2) if packets else None,
+            "projected_10k_calls": int(calls / packets * 10_000) if packets else None,
         }

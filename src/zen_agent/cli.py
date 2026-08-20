@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -143,6 +144,25 @@ def _progress_line(event: str, payload: dict[str, Any]) -> str:
     if event == "replan.requested":
         return f"verifier requested repair after cycle {payload['cycle']}"
     return f"{event}: {json.dumps(payload, ensure_ascii=False)}"
+
+
+def _agent_model_adapter(config):
+    """Model transport for the agent runtime, chosen the same way workers choose.
+
+    Reads `.zen/model-provider` so the agent and the factory cannot silently
+    disagree about which model is in use.
+    """
+    from .litellm_adapter import LiteLLMAdapter
+
+    marker = config.state_directory / "model-provider"
+    provider = (
+        os.environ.get("ZEN_MODEL_PROVIDER")
+        or (marker.read_text(encoding="utf-8").strip() if marker.is_file() else "")
+        or "codex"
+    ).strip().lower()
+    if provider == "litellm":
+        return LiteLLMAdapter(reasoning_effort=os.environ.get("ZEN_AGENT_REASONING", "medium"))
+    return CodexExecAdapter(model=config.default_model)
 
 
 def _print_progress(event: str, payload: dict[str, Any]) -> None:
@@ -362,7 +382,10 @@ def main(argv: list[str] | None = None) -> int:
                 harness_root=config.root,
                 workspace=workspace,
                 state=coding_state,
-                model=CodexExecAdapter(model=config.default_model),
+                # Which provider backs the agent loop is a setting, not a
+                # constant. Pinning it to Codex made the whole agentic layer
+                # unrunnable the moment that workspace ran out of credits.
+                model=_agent_model_adapter(config),
                 limits=limits,
                 memory=memory,
                 progress=_print_progress,

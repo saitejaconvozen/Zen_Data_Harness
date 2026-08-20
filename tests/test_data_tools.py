@@ -201,3 +201,101 @@ class ExecutorSelectionTests(unittest.TestCase):
         source = (_P(__file__).resolve().parents[1] / "src/zen_agent/cli.py").read_text()
         self.assertIn('"--agent"', source)
         self.assertIn("executor_agent=", source)
+
+
+class DispatchFloorTests(unittest.TestCase):
+    """The export is the last gate before data leaves the harness.
+
+    The turn floor is already enforced at binding, at the audit and in the
+    classifier. It is repeated at the export because that is the one place a
+    loosened upstream rule would otherwise ship unnoticed.
+    """
+
+    def conversation(self, exchanges: int):
+        turns = []
+        for i in range(exchanges):
+            turns.append({"turn_id": f"u{i}", "role": "user", "text": "hello"})
+            turns.append({
+                "turn_id": f"a{i}", "role": "assistant", "action": "KEEP",
+                "source_text": "hi", "golden_text": "hi", "metric_citations": [],
+            })
+        return {
+            "source_id": "abc", "source_id_full": "a" * 64,
+            "terminal": {"status": "VERIFIED_CANDIDATE"},
+            "classification": {}, "turns": turns,
+        }
+
+    def test_a_short_conversation_is_refused(self) -> None:
+        from zen_agent.dispatch_export import conversation_record
+
+        for exchanges in (1, 2):
+            self.assertIsNone(
+                conversation_record(self.conversation(exchanges), "run"),
+                f"{exchanges} exchanges should not be dispatched",
+            )
+
+    def test_the_minimum_is_accepted(self) -> None:
+        from zen_agent.dispatch_export import conversation_record
+
+        record = conversation_record(self.conversation(3), "run")
+        self.assertIsNotNone(record)
+        self.assertEqual(record["counts"]["exchanges"], 3)
+
+    def test_direction_follows_who_speaks_first(self) -> None:
+        from zen_agent.dispatch_export import call_direction, INBOUND, OUTBOUND
+
+        self.assertEqual(call_direction([{"role": "user"}, {"role": "assistant"}]), INBOUND)
+        self.assertEqual(call_direction([{"role": "assistant"}, {"role": "user"}]), OUTBOUND)
+        # A leading system turn must not decide direction.
+        self.assertEqual(
+            call_direction([{"role": "system"}, {"role": "assistant"}, {"role": "user"}]),
+            OUTBOUND,
+        )
+
+
+class MetricsRecorderTests(unittest.TestCase):
+    """The recorder must actually write, and must be diagnosable when it can't.
+
+    A loop variable named `root` shadowed the harness path inside
+    `_record_metrics`, so every write raised TypeError into a bare
+    `except: pass`. The pipeline ran at full speed while the dashboard
+    reported it idle — a silent instrument is worse than no instrument.
+    """
+
+    def test_recorder_writes_a_row_for_both_job_roots(self) -> None:
+        import sys as _sys
+        scripts = ROOT / "plugins" / "golden-conversations" / "scripts"
+        if str(scripts) not in _sys.path:
+            _sys.path.insert(0, str(scripts))
+        import _transport
+        from zen_agent.observability import MetricsStore
+
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            # Both roots must attribute a run: the auditor writes under
+            # factory-jobs, every other role under jobs.
+            for job_root in ("factory-jobs", "jobs"):
+                out = work / ".zen" / job_root / f"run-{job_root}" / "rp_x" / "d.json"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                parts = out.resolve().parts
+                index = parts.index(job_root)
+                self.assertEqual(parts[index + 1], f"run-{job_root}")
+                self.assertEqual(parts[index + 2], "rp_x")
+
+        # And the store itself accepts the record the recorder builds.
+        with tempfile.TemporaryDirectory() as directory:
+            store = MetricsStore(Path(directory) / "m.db")
+            try:
+                from zen_agent.observability import CallRecord
+                store.record(CallRecord(run_id="r", role="REFINER",
+                                        provider="litellm", model="m",
+                                        packet_id="rp_x", latency_ms=5))
+                self.assertEqual(store.totals("r")["calls"], 1)
+            finally:
+                store.close()
+
+    def test_the_swallow_can_be_turned_off(self) -> None:
+        source = (ROOT / "plugins/golden-conversations/scripts/_transport.py").read_text(
+            encoding="utf-8")
+        self.assertIn("ZEN_METRICS_STRICT", source)
+        self.assertIn("metrics-errors.log", source)

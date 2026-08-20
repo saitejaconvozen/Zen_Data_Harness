@@ -2,12 +2,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import Overview from "./Overview.jsx";
 import Traces from "./Traces.jsx";
-import Economics from "./Economics.jsx";
+import Performance from "./Performance.jsx";
 
 const VIEWS = [
   ["overview", "Overview"],
   ["traces", "Call traces"],
-  ["economics", "Cost & latency"],
+  ["performance", "Performance"],
 ];
 
 export default function App() {
@@ -50,7 +50,7 @@ export default function App() {
       <main className="main">
         {view === "overview" && <Overview status={status} />}
         {view === "traces" && <Traces />}
-        {view === "economics" && <Economics runId={runId} />}
+        {view === "performance" && <Performance runId={runId} />}
       </main>
     </div>
   );

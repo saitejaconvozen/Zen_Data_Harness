@@ -1,8 +1,8 @@
 """Report what the harness is actually doing, from recorded model calls.
 
-`zen-observe <run_id>` answers the questions the queue cannot: what each role
-costs, where the latency is, how often models are retried, and whether the run
-is making progress right now or merely restarting.
+`zen-observe <run_id>` answers the questions the queue cannot: how many calls
+each role takes, where the latency is, how often models are retried, and whether
+the run is making progress right now or merely restarting.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         if args.run_id:
             report["throughput"] = store.throughput(args.run_id, args.window)
-            report["economics"] = store.cost_per_conversation(args.run_id)
+            report["workload"] = store.calls_per_conversation(args.run_id)
 
         if args.json:
             print(json.dumps(report, indent=2))
@@ -61,21 +61,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  model calls   : {totals.get('calls') or 0}")
         print(f"  failures      : {totals.get('failures') or 0}")
         print(f"  tokens        : {totals.get('tokens') or 0:,}")
-        print(f"  spend         : ${totals.get('cost_usd') or 0:.4f}")
+        retries = sum(r.get("retries") or 0 for r in report["by_role"])
+        print(f"  retries       : {retries}")
 
         if args.run_id:
             rate = report["throughput"]
             print(f"\n  last {rate['window_seconds']}s: {rate['calls']} calls "
                   f"({rate['calls_per_minute']}/min), {rate.get('failures') or 0} failed")
-            economics = report["economics"]
-            if economics.get("cost_per_conversation") is not None:
-                print(f"  cost/conversation : ${economics['cost_per_conversation']:.5f}")
-                print(f"  projected 10k     : ${economics['projected_10k_usd']:.2f}")
+            workload = report["workload"]
+            if workload.get("calls_per_conversation") is not None:
+                print(f"  calls/conversation: {workload['calls_per_conversation']}")
+                print(f"  projected 10k     : "
+                      f"{workload['projected_10k_calls']:,} model calls")
 
         print("\n  by role:")
         print(_table(report["by_role"], [
             "role", "model", "calls", "failures", "retries",
-            "mean_ms", "input_tokens", "output_tokens", "cost_usd",
+            "mean_ms", "max_ms", "input_tokens", "output_tokens",
         ]))
         if report["failures"]:
             print("\n  failures:")

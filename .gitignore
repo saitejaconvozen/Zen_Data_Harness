@@ -30,3 +30,7 @@ web/dist/
 
 # Proposals the data-engineer agent writes for human review.
 .zen/proposals/
+
+# Dispatch batches carry full conversation text — same restricted source as
+# datasets/. The exporter is versioned; its output is not.
+dispatch/
