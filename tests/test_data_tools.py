@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sqlite3
+import tempfile
+import unittest
+
+from zen_agent.agent_manifests import AgentCatalog
+from zen_agent.data_tools import data_tool_specs, register_data_tools
+from zen_agent.models import ToolRisk
+from zen_agent.tools import ToolContext, ToolRegistry
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _workspace(directory: str) -> Path:
+    """A workspace holding a minimal qa-audit ledger."""
+    workspace = Path(directory)
+    (workspace / ".zen").mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(workspace / ".zen" / "qa-audit.db")
+    with db:
+        db.execute(
+            "CREATE TABLE qa_audits (run_id TEXT, source_id TEXT, batch INTEGER,"
+            " status TEXT, findings_json TEXT, audited_at REAL,"
+            " judge_verdict TEXT, judge_summary TEXT)"
+        )
+        db.execute(
+            "INSERT INTO qa_audits VALUES (?,?,?,?,?,?,?,?)",
+            ("run1", "abc", 1, "PARTIAL_CANDIDATE",
+             json.dumps([{"kind": "judge-harmful", "detail": "shortened an answer"}]),
+             0.0, "REJECT", ""),
+        )
+        db.execute(
+            "INSERT INTO qa_audits VALUES (?,?,?,?,?,?,?,?)",
+            ("run1", "def", 1, "VERIFIED_CANDIDATE",
+             json.dumps([{"kind": "judge-harmful", "detail": "dropped a fact"},
+                         {"kind": "information-loss", "detail": "35 words became 13"}]),
+             0.0, "REVIEW", ""),
+        )
+    db.close()
+    return workspace
+
+
+def _context(workspace: Path) -> ToolContext:
+    return ToolContext(run_id="run1", task_id="task1", workspace=workspace)
+
+
+class RegistrationTests(unittest.TestCase):
+    def test_tools_register_without_colliding_with_coding_tools(self) -> None:
+        from zen_agent.coding_tools import register_coding_tools
+
+        registry = ToolRegistry()
+        register_coding_tools(registry)
+        register_data_tools(registry)
+        names = set(registry.names())
+        self.assertIn("data.failure_clusters", names)
+        self.assertIn("fs.read", names)
+
+    def test_read_tools_are_declared_read_only(self) -> None:
+        """The manifest gates access, but the risk class must be honest.
+
+        `_allowed_tools` filters delegated read-only work by risk, so a
+        mislabelled reader would leak write capability to a sub-agent.
+        """
+        expected = {
+            "data.query_ledgers": ToolRisk.READ_ONLY,
+            "data.failure_clusters": ToolRisk.READ_ONLY,
+            "data.read_conversation": ToolRisk.READ_ONLY,
+            "data.read_contract": ToolRisk.READ_ONLY,
+            "data.propose_change": ToolRisk.WORKSPACE_WRITE,
+            "data.run_tests": ToolRisk.WORKSPACE_WRITE,
+        }
+        actual = {spec.name: spec.risk for spec in data_tool_specs()}
+        self.assertEqual(actual, expected)
+
+
+class QueryLedgerTests(unittest.TestCase):
+    def invoke(self, workspace: Path, **inputs):
+        registry = ToolRegistry()
+        register_data_tools(registry)
+        return registry.invoke("data.query_ledgers", _context(workspace), inputs)
+
+    def test_a_select_returns_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = _workspace(directory)
+            out = self.invoke(workspace, ledger="qa",
+                              sql="SELECT source_id FROM qa_audits ORDER BY source_id")
+            self.assertEqual([r["source_id"] for r in out["rows"]], ["abc", "def"])
+
+    def test_writes_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = _workspace(directory)
+            for sql in (
+                "DELETE FROM qa_audits",
+                "UPDATE qa_audits SET status='x'",
+                "SELECT 1; DROP TABLE qa_audits",
+                "WITH x AS (SELECT 1) INSERT INTO qa_audits VALUES (1)",
+                "ATTACH DATABASE '/etc/passwd' AS evil",
+            ):
+                with self.assertRaises(Exception, msg=sql):
+                    self.invoke(workspace, ledger="qa", sql=sql)
+
+    def test_an_unlisted_ledger_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = _workspace(directory)
+            with self.assertRaises(Exception):
+                self.invoke(workspace, ledger="passwords", sql="SELECT 1")
+
+
+class FailureClusterTests(unittest.TestCase):
+    def test_findings_group_by_kind_with_examples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = _workspace(directory)
+            registry = ToolRegistry()
+            register_data_tools(registry)
+            out = registry.invoke(
+                "data.failure_clusters", _context(workspace), {"run_id": "run1"}
+            )
+            kinds = {c["kind"]: c["count"] for c in out["clusters"]}
+            self.assertEqual(kinds, {"judge-harmful": 2, "information-loss": 1})
+            # Largest cluster first, so the agent works on what matters most.
+            self.assertEqual(out["clusters"][0]["kind"], "judge-harmful")
+            self.assertEqual(out["clusters"][0]["examples"][0]["source_id"], "abc")
+
+
+class ProposalTests(unittest.TestCase):
+    def invoke(self, workspace: Path, **inputs):
+        registry = ToolRegistry()
+        register_data_tools(registry)
+        return registry.invoke("data.propose_change", _context(workspace), inputs)
+
+    def test_a_proposal_is_written_and_nothing_is_modified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = _workspace(directory)
+            target = workspace / "plugins" / "p" / "prompts" / "refiner.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("original", encoding="utf-8")
+            out = self.invoke(
+                workspace,
+                path="plugins/p/prompts/refiner.md",
+                replacement="changed",
+                rationale="the refiner shortens substantive answers into requests to repeat",
+                evidence_source_ids=["abc", "def"],
+            )
+            self.assertEqual(out["status"], "PENDING_HUMAN_REVIEW")
+            # The contract itself is untouched: a human merges, the agent does not.
+            self.assertEqual(target.read_text(encoding="utf-8"), "original")
+            written = json.loads((workspace / out["proposal"]).read_text())
+            self.assertEqual(written["evidence_source_ids"], ["abc", "def"])
+
+    def test_a_proposal_without_evidence_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = _workspace(directory)
+            with self.assertRaises(Exception):
+                self.invoke(workspace, path="plugins/p.md", replacement="x",
+                            rationale="a" * 50, evidence_source_ids=[])
+
+    def test_a_path_outside_the_contract_roots_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = _workspace(directory)
+            for path in ("../../etc/passwd", ".zen/factory.env", "datasets/v2.jsonl"):
+                with self.assertRaises(Exception, msg=path):
+                    self.invoke(workspace, path=path, replacement="x",
+                                rationale="a" * 50, evidence_source_ids=["abc"])
+
+
+class ManifestTests(unittest.TestCase):
+    def test_the_data_engineer_manifest_loads_and_its_tools_exist(self) -> None:
+        catalog = AgentCatalog.discover([ROOT / "agents"])
+        manifest = catalog.get("data-engineer")
+        registry = ToolRegistry()
+        register_data_tools(registry)
+        missing = [name for name in manifest.tools if name not in set(registry.names())]
+        self.assertEqual(missing, [], f"manifest names unregistered tools: {missing}")
+        self.assertEqual(manifest.sandbox, "read-only")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class ExecutorSelectionTests(unittest.TestCase):
+    """The agent loop must be able to run a manifest other than `executor`.
+
+    The role was hardcoded, so the kernel could only ever write code. Selecting
+    the manifest is what turns the same loop into a data engineer.
+    """
+
+    def test_runtime_accepts_an_executor_agent(self) -> None:
+        import inspect
+        from zen_agent.coding_runtime import CodingRuntime
+
+        signature = inspect.signature(CodingRuntime.__init__)
+        self.assertIn("executor_agent", signature.parameters)
+        self.assertEqual(signature.parameters["executor_agent"].default, "executor")
+
+    def test_cli_exposes_the_agent_flag(self) -> None:
+        from pathlib import Path as _P
+        source = (_P(__file__).resolve().parents[1] / "src/zen_agent/cli.py").read_text()
+        self.assertIn('"--agent"', source)
+        self.assertIn("executor_agent=", source)

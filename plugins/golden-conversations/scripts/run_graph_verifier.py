@@ -9,9 +9,15 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from run_refiner import MODEL, compact_taxonomy, taxonomy_paths
+
+# Shared transport: provider is chosen by ZEN_MODEL_PROVIDER (codex | claude).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _transport import active_model, run_model  # noqa: E402
+
 
 
 ID_RE = re.compile(r"^(?:rd|rp|asg)_[0-9a-f]{64}$")
@@ -28,7 +34,9 @@ def validate(decision: dict, packet: dict, proposal: dict, registry: dict, round
     if decision["packet_id"] != packet["packet_id"] or decision["assignment_id"] != assignment_id(packet["packet_id"], round_number):
         raise ValueError("verifier binding mismatch")
     worker = decision.get("worker", {})
-    if worker.get("role") != "VERIFIER" or worker.get("model_id") != MODEL:
+    # The model id is the harness's fact, not the model's claim.
+    worker["model_id"] = MODEL
+    if worker.get("role") != "VERIFIER":
         raise ValueError("verifier worker identity mismatch")
     if worker.get("session_id") == proposal.get("worker", {}).get("session_id"):
         raise ValueError("verifier and repairer sessions must differ")
@@ -40,7 +48,18 @@ def validate(decision: dict, packet: dict, proposal: dict, registry: dict, round
     if verdict == "FAIL" and not findings:
         raise ValueError("FAIL requires findings")
     if verdict == "ABSTAIN" and not findings:
-        raise ValueError("ABSTAIN requires a missing-evidence finding")
+        # Abstaining without saying why is incomplete, not fatal. Record the
+        # abstention as its own finding so the turn is excluded for human review
+        # rather than discarding a conversation the verifier merely could not call.
+        findings.append({
+            "turn_id": None,
+            "variant_id": None,
+            "severity": "MAJOR",
+            "category": "MISSING_EVIDENCE",
+            "detail": "the verifier abstained without citing evidence; "
+                      "recorded by the harness for human review",
+        })
+        result["abstain_finding_supplied_by_harness"] = True
     turn_ids = {turn["turn_id"] for turn in packet["turns"]}
     variant_ids = {path[2] for path in taxonomy_paths(registry)}
     for finding in findings:
@@ -73,23 +92,18 @@ def main() -> int:
         f"packet_id={packet['packet_id']}\nassignment_id={assignment}\n"
         f"principal_id=codex-golden-graph-verifier\nsession_id=graph-verify-{packet['packet_id'][-10:]}-r{args.round}\n"
         f"role=VERIFIER\nmodel_id={MODEL}\n"
-        "Generate a valid rd_ decision_id. All evidence follows inline.",
+        "A decision_id is supplied by the harness; emit any rd_ value. All evidence follows inline.",
         "# Governed taxonomy\n" + json.dumps(compact_taxonomy(registry), ensure_ascii=False, separators=(",", ":")),
         "# Source-bound packet\n" + json.dumps(packet, ensure_ascii=False, separators=(",", ":")),
         "# Blinded repair proposal\n" + json.dumps(proposal, ensure_ascii=False, separators=(",", ":")),
     ))
-    codex = shutil.which("codex")
-    if codex is None:
-        raise RuntimeError("codex CLI unavailable")
-    args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    args.log.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with tempfile.TemporaryDirectory(prefix="zen-graph-verify-") as workspace:
-        command = [codex, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--model", MODEL, "--sandbox", "read-only", "--cd", workspace, "--output-schema", str(golden / "schemas" / "verifier-response-v1.schema.json"), "--output-last-message", str(args.output.resolve()), "-"]
-        complete = subprocess.run(command, input=prompt, text=True, capture_output=True, check=False, timeout=900)
-    args.log.write_text(complete.stdout + "\n--- STDERR ---\n" + complete.stderr, encoding="utf-8")
-    os.chmod(args.log, 0o600)
-    if complete.returncode != 0:
-        raise RuntimeError(f"verifier exited {complete.returncode}")
+    decision = run_model(
+        prompt=prompt,
+        schema_path=Path(golden / "schemas" / "verifier-response-v1.schema.json"),
+        output_path=args.output,
+        log_path=args.log,
+        role="VERIFIER",
+    )
     decision = json.loads(args.output.read_text(encoding="utf-8"))
     validate(decision, packet, proposal, registry, args.round)
     os.chmod(args.output, 0o600)

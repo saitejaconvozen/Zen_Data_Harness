@@ -56,6 +56,7 @@ start)
     tmux new-session -d -s "$SESSION" -c "$ROOT" \
         -e "ZEN_TARGET_TERMINAL=${ZEN_TARGET_TERMINAL:-}" \
         -e "ZEN_MAX_ATTEMPTS=${ZEN_MAX_ATTEMPTS:-40}" \
+        -e "ZEN_MODEL_PROVIDER=${ZEN_MODEL_PROVIDER:-codex}" \
         -e "MONGODB_URI=${MONGODB_URI:-}" \
         "scripts/run-factory.sh $RUN_ID $*"
     # Keep the pane after the command exits so output survives.

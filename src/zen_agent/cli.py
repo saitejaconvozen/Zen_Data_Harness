@@ -59,6 +59,11 @@ def parser() -> argparse.ArgumentParser:
     task.add_argument("--max-turns", type=int, default=40)
     task.add_argument("--max-cycles", type=int, default=3)
     task.add_argument("--max-tool-calls", type=int, default=200)
+    task.add_argument(
+        "--agent", default="executor",
+        help="agent manifest to execute with (see agents/); "
+             "use 'data-engineer' to investigate the conversation factory",
+    )
 
     task_status = sub.add_parser("task-status", help="inspect a coding task session")
     task_status.add_argument("session_id")
@@ -361,6 +366,7 @@ def main(argv: list[str] | None = None) -> int:
                 limits=limits,
                 memory=memory,
                 progress=_print_progress,
+                executor_agent=getattr(args, "agent", "executor"),
             )
             if session_id is None:
                 session_id = runtime.start(args.objective)

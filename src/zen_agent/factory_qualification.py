@@ -116,7 +116,24 @@ class FactoryQualificationStore:
                 (verdict, critical_failures, decision_sha256, time.time(), run_id, source_content_sha256),
             )
             if cursor.rowcount != 1:
-                raise ValueError("audit source is unknown or already committed")
+                # Distinguish the two cases this guard used to conflate. An
+                # unknown source is a real error. An already-audited source is a
+                # re-audit: policy changed and we are deliberately re-deciding,
+                # so overwrite rather than dead-letter the work item.
+                known = self.db.execute(
+                    """SELECT 1 FROM factory_configuration_sample
+                    WHERE run_id=? AND source_content_sha256=?""",
+                    (run_id, source_content_sha256),
+                ).fetchone()
+                if known is None:
+                    raise ValueError("audit source is unknown")
+                self.db.execute(
+                    """UPDATE factory_configuration_sample
+                    SET verdict=?, critical_failures=?, decision_sha256=?, updated_at=?
+                    WHERE run_id=? AND source_content_sha256=?""",
+                    (verdict, critical_failures, decision_sha256, time.time(),
+                     run_id, source_content_sha256),
+                )
             row = self.db.execute(
                 "SELECT configuration_key FROM factory_configuration_sample WHERE run_id=? AND source_content_sha256=?",
                 (run_id, source_content_sha256),

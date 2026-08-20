@@ -18,7 +18,8 @@ from zen_agent.factory_acceptance import (
 
 EXIT_BY_VERDICT = {"PASS": 0, "FAIL": 1, "NEEDS_HUMAN": 2}
 TERMINAL_STATUSES = frozenset(
-    {"VERIFIED_CANDIDATE", "PARTIAL_CANDIDATE", "QUARANTINED", "REJECTED_SOURCE"}
+    {"VERIFIED_CANDIDATE", "PARTIAL_CANDIDATE", "QUARANTINED", "REJECTED_SOURCE",
+     "NOT_SELECTED"}
 )
 # Statuses that yield reviewable golden turns.
 CANDIDATE_STATUSES = frozenset({"VERIFIED_CANDIDATE", "PARTIAL_CANDIDATE"})

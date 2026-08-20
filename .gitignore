@@ -17,3 +17,16 @@ dist/
 
 # downloaded binary, not source
 bin/cloudflared
+
+# Fine-tuning output. These are RESTRICTED_SOURCE_NOT_DEIDENTIFIED — real
+# customer calls carrying names, phone numbers and account digits. They are the
+# product of this repo, never part of it.
+datasets/
+*.jsonl
+
+# Node dependencies and build output; rebuilt with `npm ci && npm run build`.
+node_modules/
+web/dist/
+
+# Proposals the data-engineer agent writes for human review.
+.zen/proposals/

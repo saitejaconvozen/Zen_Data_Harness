@@ -1,0 +1,50 @@
+# LiteLLM proxy for the Zen data factory.
+#
+# The proxy exists so the harness talks to one stable, OpenAI-compatible
+# endpoint no matter which model is behind it. That decoupling is the point:
+# when the OpenAI workspace ran out of credits the whole factory stopped,
+# because every worker script had a provider hardcoded.
+#
+# `model_name` is the alias the harness asks for. `litellm_params.model` is the
+# real upstream. Change the upstream here and nothing in the harness moves.
+#
+# Start it with:  scripts/start-litellm.sh
+# Requires:       GEMINI_API_KEY in .zen/factory.env
+
+model_list:
+  # The alias the harness uses. Keep this name stable.
+  - model_name: gemini-3.7-flash
+    litellm_params:
+      # Swap this line to change model. Verify the id is real first:
+      #   scripts/start-litellm.sh --list-upstream
+      model: gemini/gemini-3.7-flash
+      api_key: os.environ/GEMINI_API_KEY
+      # Refinement is deterministic work; sampling variance is noise here.
+      temperature: 0
+
+  # A second, stronger alias for roles that judge rather than rewrite.
+  - model_name: gemini-pro
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      temperature: 0
+
+litellm_settings:
+  # Never log prompts or responses. The corpus is
+  # RESTRICTED_SOURCE_NOT_DEIDENTIFIED — real customer calls with names, phone
+  # numbers and account digits. None of it may reach a third-party log sink.
+  turn_off_message_logging: true
+  drop_params: true
+  # A refiner prompt can carry a whole conversation; give it room.
+  request_timeout: 600
+  num_retries: 2
+
+general_settings:
+  # The key the harness presents. Set LITELLM_MASTER_KEY in .zen/factory.env.
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+  # 10k conversations is ~50k calls; back off rather than hammer on 429.
+  allowed_fails: 3
+  cooldown_time: 30

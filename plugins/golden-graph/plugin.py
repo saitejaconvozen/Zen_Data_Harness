@@ -356,7 +356,7 @@ def register(registry):
     registry.tools.register(ToolSpec("golden.graph_verify", "0.1.0", "Independently verify one repair in a fresh GPT-5.6-sol session", ToolRisk.WORKSPACE_WRITE, verify_input, _route_schema(("summary", "finding_turn_ids", "blocking_turn_ids", "text_findings", "metadata_findings"), {"summary": {"type": "object"}, "finding_turn_ids": {"type": "array", "items": {"type": "string"}}, "blocking_turn_ids": {"type": "array", "items": {"type": "string"}}, "text_findings": {"type": "integer"}, "metadata_findings": {"type": "integer"}}), _verify))
     terminal_input = json.loads(json.dumps(_BASE_INPUT))
     terminal_input["required"].append("terminal_status")
-    terminal_input["properties"]["terminal_status"] = {"type": "string", "enum": ["VERIFIED_CANDIDATE", "PARTIAL_CANDIDATE", "QUARANTINED"]}
+    terminal_input["properties"]["terminal_status"] = {"type": "string", "enum": ["VERIFIED_CANDIDATE", "PARTIAL_CANDIDATE", "QUARANTINED", "NOT_SELECTED"]}
     registry.tools.register(ToolSpec("golden.graph_terminal", "0.1.0", "Commit a graph lane terminal state", ToolRisk.WORKSPACE_WRITE, terminal_input, _route_schema(("schema_version", "status", "graph_run_id", "lineage_root_run_id"), {"status": {"type": "string"}, "graph_run_id": {"type": "string"}, "lineage_root_run_id": {"type": "string"}}), _terminal))
 
 

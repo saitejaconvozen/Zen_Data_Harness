@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from typing import Any
 
 from .artifacts import ArtifactStore
@@ -9,6 +11,9 @@ from .factory_queue import ClaimedWork, LocalFactoryQueue
 from .policy import PolicyEngine
 from .tools import ToolContext, ToolRegistry
 
+
+# Fewer assistant turns than this and there is not enough conversation to refine.
+MIN_USABLE_TURNS = 3
 
 STAGE_TOOLS = {
     "trace_fetch": "golden.sample_conversations",
@@ -166,6 +171,29 @@ class FactoryWorker:
                 decision_sha256=output["decision_sha256"],
             )
             decision = self.qualification.decide(run_id, key)
+            # Selective acquisition. When the corpus is far larger than the batch
+            # needed, refining only calls where the agent already followed its
+            # configuration produces cleaner training data: little has to change,
+            # so there is little the refiner can make worse. Non-adherent calls
+            # are not defects to discard — they are simply not what this batch is
+            # for, and stay available to a later run.
+            # Quality selection is on `critical_failures`, not on `verdict`.
+            # Measured on a real batch: 76 of 76 conversations returned FAIL,
+            # because the auditor always finds some deviation in a live call —
+            # so PASS is unattainable and gating on it selects nothing. Absence
+            # of *critical* failure is the signal that actually separates a sound
+            # call from a broken one: 31 of those same 76 had zero.
+            limit = os.environ.get("ZEN_MAX_CRITICAL_FAILURES", "").strip()
+            if limit:
+                observed = int(summary.get("critical_failures", 0) or 0)
+                if observed > int(limit):
+                    self._enqueue_terminal(
+                        run_id, work, "NOT_SELECTED", 0,
+                        f"{observed} critical failures exceeds the batch limit of "
+                        f"{limit}; the conversation is sound data but not what this "
+                        "batch selects for, and remains available to a later run",
+                    )
+                    return
             if not summary.get("conversation_usable", False):
                 self._enqueue_terminal(
                     run_id, work, "QUARANTINED", 0,
@@ -274,27 +302,36 @@ class FactoryWorker:
         """
 
         stage = "repair" if repaired else "initial"
-        # Genuine whole-conversation blockers.
-        if proposal.get("prompt_usable") is not True:
-            return "QUARANTINED", "system prompt is too incoherent to judge adherence"
-        if proposal.get("conversation_assessable") is False:
-            return "QUARANTINED", "no turn in this conversation is assessable"
+
+        # A rejected proposal gets another attempt; that is not a rejection of
+        # the conversation.
         if decision == "FAIL":
             return "REPAIR", f"{stage} verifier rejected the proposal"
-        if decision != "PASS":
-            return "QUARANTINED", f"{stage} verification ended with {decision}"
 
+        # Policy: the only thing that discards a conversation is having too
+        # little of it left. An incoherent prompt, an abstaining verifier and
+        # turns we cannot assess all exclude turns and send the rest to a human.
+        total = int(proposal.get("assistant_turns", 0) or 0)
         excluded = set(proposal.get("divergent_turns") or [])
         excluded.update(proposal.get("unassessable_turns") or [])
-        total = int(proposal.get("assistant_turns", 0) or 0)
-        if not excluded:
+        # `total` is model-reported. When it is absent, trust the deterministic
+        # turn-count gate the auditor already applied rather than discarding.
+        if total and total - len(excluded) < MIN_USABLE_TURNS:
+            return "QUARANTINED", (
+                f"only {total - len(excluded)} of {total} assistant turns are "
+                f"usable; minimum is {MIN_USABLE_TURNS}"
+            )
+
+        notes = []
+        if decision != "PASS":
+            notes.append(f"{stage} verification ended with {decision}")
+        if proposal.get("prompt_usable") is not True:
+            notes.append("system prompt has coherence issues")
+        if excluded:
+            notes.append(f"{len(excluded)} of {total} turns excluded")
+        if not notes:
             return "VERIFIED_CANDIDATE", f"{stage} independent verifier passed"
-        if total and len(excluded) >= total:
-            return "QUARANTINED", "no assistant turn survived turn-level exclusion"
-        return (
-            "PARTIAL_CANDIDATE",
-            f"{stage} verifier passed; {len(excluded)} of {total} turns excluded",
-        )
+        return "PARTIAL_CANDIDATE", "; ".join(notes)
 
     def _enqueue_refinement(
         self,
@@ -381,19 +418,19 @@ class FactoryWorker:
     ) -> None:
         """Salvage a conversation whose repair budget ran out.
 
-        A single unresolved finding used to discard every turn in the packet.
-        Only turns the verifier still objects to are excluded now; the packet is
-        quarantined solely when nothing usable survives.
+        Turns the verifier still objects to are excluded; the rest is kept. Only
+        a conversation with too little left is discarded.
         """
 
         proposal = dict(work.payload.get("proposal_summary") or {})
         blocking = list(output.get("blocking_turn_ids") or output.get("finding_turn_ids") or [])
         excluded = set(proposal.get("divergent_turns") or []) | set(blocking)
         total = int(proposal.get("assistant_turns", 0) or 0)
-        if not blocking or (total and len(excluded) >= total):
+        if total - len(excluded) < MIN_USABLE_TURNS:
             self._enqueue_terminal(
                 run_id, work, "QUARANTINED", round_number,
-                "repair rounds exhausted with no turn left acceptable",
+                f"repair exhausted; only {total - len(excluded)} of {total} turns "
+                f"acceptable, minimum is {MIN_USABLE_TURNS}",
             )
             return
         proposal["divergent_turns"] = sorted(excluded)

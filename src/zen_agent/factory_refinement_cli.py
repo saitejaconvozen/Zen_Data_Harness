@@ -19,11 +19,20 @@ DOWNSTREAM_STAGES = (
 )
 
 
-def _audit_decision(root: Path, run_id: str, packet_id: str) -> dict:
+def _audit_decision(root: Path, run_id: str, packet_id: str) -> dict | None:
+    """Read a committed audit, or None when its artifact is gone.
+
+    A missing artifact used to abort the whole run. It means only that this one
+    conversation cannot be re-derived from disk, which the caller heals by
+    re-auditing it.
+    """
     path = root / ".zen" / "factory-jobs" / run_id / packet_id / "agent-audit.json"
     if not path.is_file():
-        raise FileNotFoundError(f"missing committed agent audit: {packet_id}")
-    return json.loads(path.read_text(encoding="utf-8"))["decision"]
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))["decision"]
+    except (ValueError, KeyError):
+        return None
 
 
 def enqueue_existing(
@@ -43,8 +52,37 @@ def enqueue_existing(
     samples = qualification.samples(run_id)
     if limit is not None:
         samples = samples[:limit]
+    # Conversations that already have work in flight need nothing re-derived.
+    active_keys = {
+        row["job_key"]
+        for row in queue.items_for_run(run_id)
+        if row["stage"] != "agent_audit"
+    }
     for sample in samples:
         audit = _audit_decision(root, run_id, sample["packet_id"])
+        job_key = f"conversation-{sample['source_content_sha256']}"
+        if audit is None:
+            # The decision cannot be read back. If the conversation is already
+            # moving through the pipeline there is nothing to do; otherwise
+            # re-audit it rather than silently dropping it.
+            if job_key in active_keys:
+                counts["audit_artifact_missing_in_flight"] += 1
+            else:
+                queue.enqueue(
+                    run_id, job_key, "agent_audit",
+                    {
+                        "tool": "factory.audit_conversation",
+                        "inputs": {
+                            "packet_batch": sample["packet_batch"],
+                            "packet_index": sample["packet_index"],
+                        },
+                        "source_content_sha256": sample["source_content_sha256"],
+                        "packet_id": sample["packet_id"],
+                    },
+                    max_attempts=2, priority=80,
+                )
+                counts["audit_requeued"] += 1
+            continue
         common = {
             "source_content_sha256": sample["source_content_sha256"],
             "packet_id": sample["packet_id"],
@@ -57,7 +95,6 @@ def enqueue_existing(
             "packet_batch": sample["packet_batch"],
             "packet_index": sample["packet_index"],
         }
-        job_key = f"conversation-{sample['source_content_sha256']}"
         common["conversation_job_key"] = job_key
         if audit["conversation_usable"]:
             inserted = queue.enqueue(

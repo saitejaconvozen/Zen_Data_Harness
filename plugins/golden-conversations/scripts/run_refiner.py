@@ -23,8 +23,12 @@ from zen_agent.turn_format import (  # noqa: E402
     requires_language_tag,
 )
 
+# Shared transport: provider is chosen by ZEN_MODEL_PROVIDER (codex | claude).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _transport import active_model, run_model  # noqa: E402
 
-MODEL = "gpt-5.6-sol"
+
+MODEL = active_model()
 ID_RE = re.compile(r"^(?:rd|rp|asg)_[0-9a-f]{64}$")
 # Text that describes the mechanism rather than speaking to the caller.
 _NARRATION_RE = re.compile(
@@ -143,7 +147,9 @@ def validate_decision(decision: dict, packet: dict, registry: dict) -> None:
     if decision["assignment_id"] != assignment_id(packet["packet_id"]):
         raise ValueError("decision assignment_id mismatch")
     worker = decision.get("worker", {})
-    if worker.get("role") != "REFINER" or worker.get("model_id") != MODEL:
+    # The model id is the harness's fact, not the model's claim.
+    worker["model_id"] = MODEL
+    if worker.get("role") != "REFINER":
         raise ValueError("worker role/model mismatch")
 
     # A `tool` turn is what the backend actually returned — immutable evidence,
@@ -184,9 +190,11 @@ def validate_decision(decision: dict, packet: dict, registry: dict) -> None:
                 row["golden_text"] = source["text"]
                 row["narration_removed_by_harness"] = True
             else:
-                raise ValueError(f"KEEP text changed at {row['turn_id']}")
+                row["golden_text"] = source["text"]
+                row["keep_text_restored_by_harness"] = True
         if row["action"] == "KEEP" and row["semantic_delta"] != "NONE":
-            raise ValueError(f"KEEP semantic_delta must be NONE at {row['turn_id']}")
+            row["semantic_delta"] = "NONE"
+            row["semantic_delta_corrected_by_harness"] = True
         # An unchanged "replacement" is a no-op — unless the tool call changed,
         # which is a real correction even when the spoken text is identical.
         tool_changed = (
@@ -202,17 +210,23 @@ def validate_decision(decision: dict, packet: dict, registry: dict) -> None:
             continue
         # A stylistic observation is not a defect. Only a real violation earns a
         # rewrite; anything else is left exactly as it was spoken.
+        # The model kept a turn it graded as defective — it found no grounded
+        # correction. Preserving the source is right; presenting it as exemplary
+        # is not. Exclude the turn and keep the rest of the conversation.
         if row["action"] == "KEEP" and row["source_quality"] not in {"PERFECT", "MINOR_GAP"}:
-            raise ValueError(
-                f"KEEP requires PERFECT or MINOR_GAP source_quality at {row['turn_id']}"
-            )
+            row["evidence_status"] = "INSUFFICIENT"
+            row["kept_defect_excluded_by_harness"] = True
+        # Stylistic preference is not a defect. Restore what was actually said
+        # rather than shipping an unjustified rewrite.
         if row["action"] == "REPLACE" and row["source_quality"] not in {
             "MAJOR_GAP", "CRITICAL_GAP"
         }:
-            raise ValueError(
-                f"REPLACE requires MAJOR_GAP or CRITICAL_GAP at {row['turn_id']}; "
-                f"{row['source_quality']} is not a defect"
-            )
+            row["action"] = "KEEP"
+            row["golden_text"] = source["text"]
+            row["semantic_delta"] = "NONE"
+            row["annotations"] = []
+            row["unjustified_replacement_reverted_by_harness"] = True
+            continue
         # Never let a fabricated tool call reach the dataset. Adding a call
         # invents an action that never happened and whose result never existed —
         # the model would learn to claim work it did not do. A genuinely missing
@@ -233,7 +247,12 @@ def validate_decision(decision: dict, packet: dict, registry: dict) -> None:
             row["narration_removed_by_harness"] = True
         # Only a REPLACE must justify itself; a perfect turn may cite nothing.
         if row["action"] == "REPLACE" and not row["annotations"]:
-            raise ValueError(f"REPLACE has no justifying annotation: {row['turn_id']}")
+            row["action"] = "KEEP"
+            row["golden_text"] = source["text"]
+            row["semantic_delta"] = "NONE"
+            row["source_quality"] = "MINOR_GAP"
+            row["unjustified_replacement_reverted_by_harness"] = True
+            continue
         # Whether a user turn follows is a fact the harness already computed.
         # Correct a mislabel instead of discarding the whole conversation.
         coherence = row["downstream_coherence"]
@@ -245,7 +264,12 @@ def validate_decision(decision: dict, packet: dict, registry: dict) -> None:
             row["downstream_coherence"] = coherence = "PRESERVED"
             row["coherence_corrected_by_harness"] = True
         if coherence == "DIVERGENT" and not row.get("divergence_reason"):
-            raise ValueError(f"DIVERGENT requires divergence_reason at {row['turn_id']}")
+            row["divergence_reason"] = (
+                "the refiner marked this turn divergent without stating why; "
+                "excluded for human review"
+            )
+            row["divergence_reason_supplied_by_harness"] = True
+        invalid = []
         for annotation in row["annotations"]:
             path = (
                 annotation["axis_id"],
@@ -253,7 +277,15 @@ def validate_decision(decision: dict, packet: dict, registry: dict) -> None:
                 annotation["variant_id"],
             )
             if path not in valid_paths:
-                raise ValueError(f"invalid taxonomy path at {row['turn_id']}: {path}")
+                invalid.append(annotation)
+        if invalid:
+            row["annotations"] = [a for a in row["annotations"] if a not in invalid]
+            row["invalid_annotations_dropped_by_harness"] = True
+            if row["action"] == "REPLACE" and not row["annotations"]:
+                row["action"] = "KEEP"
+                row["golden_text"] = source["text"]
+                row["semantic_delta"] = "NONE"
+                row["source_quality"] = "MINOR_GAP"
 
 
 def main() -> int:
@@ -280,7 +312,7 @@ def main() -> int:
             f"packet_id={packet['packet_id']}\nassignment_id={assignment}\n"
             f"principal_id=codex-golden-refiner\nsession_id=refiner-{packet['packet_id'][-12:]}-v2\n"
             f"role=REFINER\nmodel_id={MODEL}\n"
-            "Generate a valid rd_ decision_id. Do not use tools; all evidence follows inline.",
+            "A decision_id is supplied by the harness; emit any rd_ value. Do not use tools; all evidence follows inline.",
             "# Governed active taxonomy JSON\n" + json.dumps(compact_taxonomy(registry), ensure_ascii=False, separators=(",", ":")),
             "# Source-bound refinement packet JSON\n" + json.dumps(packet, ensure_ascii=False, separators=(",", ":")),
         )
@@ -288,31 +320,13 @@ def main() -> int:
     if len(prompt) > 1_500_000:
         raise ValueError("inline refiner prompt exceeds 1.5 million characters")
 
-    codex = shutil.which("codex")
-    if codex is None:
-        raise RuntimeError("codex CLI is unavailable")
-    args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    args.log.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with tempfile.TemporaryDirectory(prefix="zen-refiner-") as workspace:
-        command = [
-            codex, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-            "--skip-git-repo-check", "--model", MODEL, "--sandbox", "read-only",
-            "--cd", workspace,
-            "--output-schema", str(golden / "schemas" / "refiner-response-v1.schema.json"),
-            "--output-last-message", str(args.output.resolve()), "-",
-        ]
-        completed = subprocess.run(
-            command, input=prompt, text=True, capture_output=True, check=False,
-            timeout=900,
-        )
-    args.log.write_text(
-        completed.stdout + "\n--- STDERR ---\n" + completed.stderr,
-        encoding="utf-8",
+    decision = run_model(
+        prompt=prompt,
+        schema_path=Path(golden / "schemas" / "refiner-response-v1.schema.json"),
+        output_path=args.output,
+        log_path=args.log,
+        role="REFINER",
     )
-    os.chmod(args.log, 0o600)
-    if completed.returncode != 0:
-        raise RuntimeError(f"codex refiner failed with code {completed.returncode}")
-    decision = json.loads(args.output.read_text(encoding="utf-8"))
     validate_decision(decision, packet, registry)
 
     rows = decision["decision"]["assistant_turns"]

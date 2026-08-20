@@ -97,47 +97,59 @@ class ValidationTests(unittest.TestCase):
         """The old schema forced a finding on every turn, driving over-replacement."""
         self.validate([_row("turn_0002"), _row("turn_0004")])
 
-    def test_replace_must_justify_itself(self) -> None:
+    def test_an_unjustified_replacement_is_reverted_not_rejected(self) -> None:
+        """No annotation means no defect was shown, so the source stands."""
         rows = [
             _row("turn_0002", action="REPLACE", golden_text="Hi there, how can I help?",
                  semantic_delta="STYLE_ONLY", source_quality="MAJOR_GAP"),
             _row("turn_0004"),
         ]
-        with self.assertRaises(ValueError):
-            self.validate(rows)
-        rows[0]["annotations"] = [_annotation()]
         self.validate(rows)
+        self.assertEqual(rows[0]["action"], "KEEP")
+        self.assertEqual(rows[0]["golden_text"], "Hello, how can I help?")
+        self.assertTrue(rows[0]["unjustified_replacement_reverted_by_harness"])
+
+        rows[0].update(action="REPLACE", golden_text="Hi there, how can I help?",
+                       source_quality="MAJOR_GAP", annotations=[_annotation()])
+        self.validate(rows)
+        self.assertEqual(rows[0]["action"], "REPLACE")
 
     def test_stylistic_gaps_are_kept_not_rewritten(self) -> None:
         """MINOR_GAP is a preference, not a defect; rewriting it changes content."""
         self.validate([_row("turn_0002", source_quality="MINOR_GAP"), _row("turn_0004")])
 
-    def test_keep_rejects_a_real_defect(self) -> None:
+    def test_a_kept_defect_excludes_the_turn_not_the_conversation(self) -> None:
+        """The model found no grounded correction. Keeping the source is right;
+        shipping it as exemplary data is not, so the turn is excluded."""
         for quality in ("MAJOR_GAP", "CRITICAL_GAP"):
-            with self.assertRaises(ValueError):
-                self.validate([_row("turn_0002", source_quality=quality), _row("turn_0004")])
+            rows = [_row("turn_0002", source_quality=quality), _row("turn_0004")]
+            self.validate(rows)
+            self.assertEqual(rows[0]["evidence_status"], "INSUFFICIENT")
+            self.assertTrue(rows[0]["kept_defect_excluded_by_harness"])
+            self.assertEqual(rows[0]["golden_text"], "Hello, how can I help?")
 
-    def test_replace_requires_an_actual_defect(self) -> None:
+    def test_a_stylistic_rewrite_is_reverted_to_the_source(self) -> None:
         rows = [
             _row("turn_0002", action="REPLACE", golden_text="Rephrased for style",
                  semantic_delta="STYLE_ONLY", source_quality="MINOR_GAP",
                  annotations=[_annotation()]),
             _row("turn_0004"),
         ]
-        with self.assertRaises(ValueError):
-            self.validate(rows)
-        rows[0]["source_quality"] = "MAJOR_GAP"
         self.validate(rows)
+        self.assertEqual(rows[0]["action"], "KEEP")
+        self.assertEqual(rows[0]["golden_text"], "Hello, how can I help?")
+        self.assertTrue(rows[0]["unjustified_replacement_reverted_by_harness"])
 
-    def test_replace_contradicting_perfect_is_rejected(self) -> None:
+    def test_replacing_a_turn_graded_perfect_is_reverted(self) -> None:
         rows = [
             _row("turn_0002", action="REPLACE", golden_text="Different text",
                  semantic_delta="STYLE_ONLY", source_quality="PERFECT",
                  annotations=[_annotation()]),
             _row("turn_0004"),
         ]
-        with self.assertRaises(ValueError):
-            self.validate(rows)
+        self.validate(rows)
+        self.assertEqual(rows[0]["action"], "KEEP")
+        self.assertEqual(rows[0]["golden_text"], "Hello, how can I help?")
 
     def test_terminal_turn_mislabels_are_corrected_not_rejected(self) -> None:
         """Whether a user turn follows is a fact the harness already knows.
@@ -157,15 +169,17 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(rows[0]["downstream_coherence"], "PRESERVED")
         self.assertTrue(rows[0]["coherence_corrected_by_harness"])
 
-    def test_divergent_requires_a_reason(self) -> None:
+    def test_a_missing_divergence_reason_is_supplied_not_rejected(self) -> None:
         rows = [
             _row("turn_0002", action="REPLACE", golden_text="What is your order number?",
                  semantic_delta="DIALOGUE_ACT", source_quality="MAJOR_GAP",
                  downstream_coherence="DIVERGENT", annotations=[_annotation()]),
             _row("turn_0004"),
         ]
-        with self.assertRaises(ValueError):
-            self.validate(rows)
+        self.validate(rows)
+        self.assertTrue(rows[0]["divergence_reason_supplied_by_harness"])
+        self.assertIn("human review", rows[0]["divergence_reason"])
+
         rows[0]["divergence_reason"] = "asks for the order number the user never gave"
         self.validate(rows)
 

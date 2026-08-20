@@ -327,9 +327,14 @@ def build_review(root: Path, run_id: str) -> dict[str, Any]:
         terminal = terminals.get(
             packet["packet_id"],
             {
+                # An absent audit is not a rejection. Only an audit that ran and
+                # said the conversation is unusable rejects it; a missing or
+                # unreadable decision means it has yet to be judged.
                 "status": (
-                    "IN_PROGRESS" if latest else
-                    ("REJECTED_SOURCE" if not audit.get("conversation_usable") else "QUEUED")
+                    "IN_PROGRESS" if latest
+                    else "AWAITING_AUDIT" if not audit
+                    else "REJECTED_SOURCE" if audit.get("conversation_usable") is False
+                    else "QUEUED"
                 ),
                 "reason": None,
                 "round": None,
@@ -358,6 +363,9 @@ def build_review(root: Path, run_id: str) -> dict[str, Any]:
                 "packet_id": packet["packet_id"],
                 "source_id": sample["source_content_sha256"][:12],
                 "configuration_id": sample["configuration_key"][:12],
+                "agent_id": packet["source"].get("agent_id"),
+                "agent_version": packet["source"].get("agent_version"),
+                "call_id": packet["source"].get("call_id"),
                 "source_id_full": sample["source_content_sha256"],
                 "configuration_status": sample["configuration_status"],
                 "terminal": terminal,

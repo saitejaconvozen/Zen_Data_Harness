@@ -133,6 +133,16 @@ def _normalise_tool_calls(raw: Any) -> list[dict[str, Any]]:
     return calls
 
 
+# Quality floor for acquisition. With ~1.6M conversations available and only a
+# few thousand needed, being selective costs nothing and avoids spending model
+# calls on thin calls that yield little training signal. Raise these to be
+# pickier; they are read at sample time, not import time.
+def _quality_floor() -> tuple[int, float]:
+    turns = int(os.environ.get("ZEN_MIN_EXCHANGE_TURNS", "6"))
+    seconds = float(os.environ.get("ZEN_MIN_DURATION_SECONDS", "20"))
+    return max(turns, 6), max(seconds, 20.0)
+
+
 def bind_conversation(document: dict[str, Any], max_chars: int = 100_000) -> dict[str, Any]:
     history = document.get("chat_history")
     if not isinstance(history, list):
@@ -332,9 +342,14 @@ class ReadOnlyMongoSource:
         selected = []
         rejection_counts: dict[str, int] = {}
         for agent_id in agent_ids:
+            min_turns, min_duration = _quality_floor()
             documents = list(
                 calls.find(
-                    {"agent_id": agent_id, "chat_history.5": {"$exists": True}},
+                    {
+                        "agent_id": agent_id,
+                        # Index-friendly floor: the Nth turn must exist at all.
+                        f"chat_history.{min_turns - 1}": {"$exists": True},
+                    },
                     {
                         "_id": 1, "agent_id": 1, "agent_version": 1, "call_id": 1,
                         "creation_date": 1, "duration": 1, "chat_history": 1,
@@ -344,18 +359,54 @@ class ReadOnlyMongoSource:
                 .hint("agent_id_-1")
                 .limit(scan_per_agent)
             )
-            ranked = sorted(
-                documents,
-                key=lambda item: _hash_text(
-                    f"{seed}\x1f{agent_id}\x1f{str(item.get('_id') or '')}"
-                ),
-            )
+            # Stratify by complexity before sampling. Taking the first N that
+            # clear a floor yields a corpus of one shape — either all short
+            # calls or, with a high floor, all long ones. A model trained on
+            # that generalises to neither. Bucketing by exchange count and
+            # rotating across buckets keeps simple, moderate and complex calls
+            # all represented, while the hash keeps selection within a bucket
+            # deterministic for a given seed.
+            buckets: dict[str, list[dict[str, Any]]] = {
+                "simple": [], "moderate": [], "complex": []
+            }
+            for item in documents:
+                history = item.get("chat_history")
+                exchanges = len(history) // 2 if isinstance(history, list) else 0
+                if exchanges <= 5:
+                    buckets["simple"].append(item)
+                elif exchanges <= 12:
+                    buckets["moderate"].append(item)
+                else:
+                    buckets["complex"].append(item)
+            for items in buckets.values():
+                items.sort(
+                    key=lambda item: _hash_text(
+                        f"{seed}\x1f{agent_id}\x1f{str(item.get('_id') or '')}"
+                    )
+                )
+            ranked = []
+            depth = 0
+            while any(depth < len(items) for items in buckets.values()):
+                for name in ("complex", "moderate", "simple"):
+                    items = buckets[name]
+                    if depth < len(items):
+                        ranked.append(items[depth])
+                depth += 1
             accepted_for_agent = 0
             for document in ranked:
                 try:
                     bound = bind_conversation(document)
-                    if bound["duration_seconds"] < 20.0:
-                        raise ValueError("conversation duration is below 20 seconds")
+                    if bound["duration_seconds"] < min_duration:
+                        raise ValueError(
+                            f"conversation duration is below {min_duration:.0f} seconds"
+                        )
+                    # A meaningful call is a real exchange, not one long monologue
+                    # answered twice. Require depth on both sides.
+                    pairs = min(bound["user_turn_count"], bound["assistant_turn_count"])
+                    if pairs * 2 < min_turns:
+                        raise ValueError(
+                            f"conversation has only {pairs} user/assistant exchanges"
+                        )
                 except Exception as exc:
                     key = str(exc)
                     rejection_counts[key] = rejection_counts.get(key, 0) + 1

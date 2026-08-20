@@ -45,6 +45,41 @@ class FactoryQualificationTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_a_source_can_be_re_audited_when_policy_changes(self):
+        """Re-deciding is not an error.
+
+        The guard used to reject any second audit with "unknown or already
+        committed", so tightening the usability rule dead-lettered 150 work
+        items instead of re-auditing them.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            store = FactoryQualificationStore(Path(directory) / "qualification.db")
+            try:
+                store.register_packet("run", packet(0), "batch.json", 0)
+                digest = packet(0)["source"]["source_content_sha256"]
+                store.record_audit("run", digest, verdict="QUARANTINE",
+                                   critical_failures=1, decision_sha256="a" * 64)
+                store.record_audit("run", digest, verdict="PASS",
+                                   critical_failures=0, decision_sha256="b" * 64)
+                verdict = store.db.execute(
+                    "SELECT verdict FROM factory_configuration_sample "
+                    "WHERE run_id=? AND source_content_sha256=?",
+                    ("run", digest),
+                ).fetchone()["verdict"]
+                self.assertEqual(verdict, "PASS")
+            finally:
+                store.close()
+
+    def test_an_unknown_source_is_still_an_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = FactoryQualificationStore(Path(directory) / "qualification.db")
+            try:
+                with self.assertRaises(ValueError):
+                    store.record_audit("run", "c" * 64, verdict="PASS",
+                                       critical_failures=0, decision_sha256="d" * 64)
+            finally:
+                store.close()
+
     def test_critical_failure_rejects_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             store = FactoryQualificationStore(Path(directory) / "qualification.db")

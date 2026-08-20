@@ -17,6 +17,7 @@ from .memory import MemoryStore
 from .model_adapter import ModelAdapter
 from .models import ToolRisk
 from .skills import SkillCatalog
+from .data_tools import register_data_tools
 from .tools import ToolContext, ToolRegistry
 from .workspace import Workspace
 
@@ -59,6 +60,7 @@ class CodingRuntime:
         hooks: HookRunner | None = None,
         memory: MemoryStore | None = None,
         progress: Callable[[str, dict[str, Any]], None] | None = None,
+        executor_agent: str = "executor",
     ):
         self.harness_root = harness_root.resolve()
         self.workspace = Workspace(workspace).root
@@ -72,8 +74,19 @@ class CodingRuntime:
         )
         self.memory = memory
         self.progress = progress
+        # Which manifest does the executing work. The default writes code; the
+        # `data-engineer` manifest investigates the conversation factory instead.
+        # Both run the same loop — only the tool allowlist and instructions differ.
+        self.executor_agent = executor_agent
         self.tools = ToolRegistry()
         register_coding_tools(self.tools)
+        # The agent kernel and the data factory were built as separate systems
+        # with separate registries, so an agent could read files and run git but
+        # could not see a single conversation the factory had processed. These
+        # give it that domain: the factory's own ledgers, decisions and
+        # contracts. Which of them any agent may actually call is still bounded
+        # by its manifest's `tools:` allowlist.
+        register_data_tools(self.tools)
 
     def start(self, objective: str) -> str:
         identifier = self.state.create_session(
@@ -244,7 +257,7 @@ class CodingRuntime:
         cycle: int,
         feedback: list[str],
     ) -> str | None:
-        manifest = self._agent("executor")
+        manifest = self._agent(self.executor_agent)
         allowed_tools = self._allowed_tools(manifest)
         context = context + "\n\n# Executor manifest instructions\n" + manifest.instructions
         self._agent_event(session_id, "AgentStart", manifest, {"cycle": cycle})

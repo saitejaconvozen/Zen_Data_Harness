@@ -9,9 +9,15 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from run_refiner import MODEL, compact_taxonomy, taxonomy_paths
+
+# Shared transport: provider is chosen by ZEN_MODEL_PROVIDER (codex | claude).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _transport import active_model, run_model  # noqa: E402
+
 
 
 ID_RE = re.compile(r"^(?:rd|rp|asg)_[0-9a-f]{64}$")
@@ -35,7 +41,9 @@ def validate_decision(
     if decision["assignment_id"] != assignment_id(packet["packet_id"]):
         raise ValueError("decision assignment_id mismatch")
     worker = decision.get("worker", {})
-    if worker.get("role") != "VERIFIER" or worker.get("model_id") != MODEL:
+    # The model id is the harness's fact, not the model's claim.
+    worker["model_id"] = MODEL
+    if worker.get("role") != "VERIFIER":
         raise ValueError("worker role/model mismatch")
     if worker.get("session_id") == refiner.get("worker", {}).get("session_id"):
         raise ValueError("verifier session must differ from refiner session")
@@ -91,7 +99,7 @@ def main() -> int:
             f"packet_id={packet['packet_id']}\nassignment_id={assignment}\n"
             f"principal_id=codex-golden-verifier\nsession_id=verifier-{packet['packet_id'][-12:]}-v1\n"
             f"role=VERIFIER\nmodel_id={MODEL}\n"
-            "Generate a valid rd_ decision_id. Do not use tools; all evidence follows inline.",
+            "A decision_id is supplied by the harness; emit any rd_ value. Do not use tools; all evidence follows inline.",
             "# Governed active taxonomy JSON\n" + json.dumps(compact_taxonomy(registry), ensure_ascii=False, separators=(",", ":")),
             "# Source-bound refinement packet JSON\n" + json.dumps(packet, ensure_ascii=False, separators=(",", ":")),
             "# Blinded proposed refiner decision JSON\n" + json.dumps(refiner, ensure_ascii=False, separators=(",", ":")),
@@ -100,30 +108,13 @@ def main() -> int:
     if len(prompt) > 2_000_000:
         raise ValueError("inline verifier prompt exceeds 2 million characters")
 
-    codex = shutil.which("codex")
-    if codex is None:
-        raise RuntimeError("codex CLI is unavailable")
-    args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    args.log.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with tempfile.TemporaryDirectory(prefix="zen-verifier-") as workspace:
-        command = [
-            codex, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-            "--skip-git-repo-check", "--model", MODEL, "--sandbox", "read-only",
-            "--cd", workspace,
-            "--output-schema", str(golden / "schemas" / "verifier-response-v1.schema.json"),
-            "--output-last-message", str(args.output.resolve()), "-",
-        ]
-        completed = subprocess.run(
-            command, input=prompt, text=True, capture_output=True, check=False,
-            timeout=900,
-        )
-    args.log.write_text(
-        completed.stdout + "\n--- STDERR ---\n" + completed.stderr,
-        encoding="utf-8",
+    decision = run_model(
+        prompt=prompt,
+        schema_path=Path(golden / "schemas" / "verifier-response-v1.schema.json"),
+        output_path=args.output,
+        log_path=args.log,
+        role="VERIFIER",
     )
-    os.chmod(args.log, 0o600)
-    if completed.returncode != 0:
-        raise RuntimeError(f"codex verifier failed with code {completed.returncode}")
     decision = json.loads(args.output.read_text(encoding="utf-8"))
     validate_decision(decision, packet, refiner, registry)
     os.chmod(args.output, 0o600)

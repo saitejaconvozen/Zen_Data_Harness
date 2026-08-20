@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
@@ -7,8 +8,14 @@ from math import ceil
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 from typing import Any, Callable
+
+_SCRIPTS = Path(__file__).resolve().parents[2] / "plugins" / "golden-conversations" / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from _transport import active_model as _active_model, run_model as _run_model  # noqa: E402
 
 from .config import PINNED_MODEL
 from .factory_inventory import normalize_agent_inventory
@@ -171,35 +178,35 @@ CRITIC_SCHEMA: dict[str, Any] = {
 
 
 class IsolatedCodexRole:
-    def __init__(self, model: str = PINNED_MODEL):
-        if model != PINNED_MODEL:
-            raise ValueError(f"factory roles must use {PINNED_MODEL}")
-        self.model = model
+    """Run one planning role in isolation, on whichever provider is configured.
+
+    Named for Codex because that is all it could once use. `ZEN_MODEL_PROVIDER`
+    now selects the transport, so the control plane keeps working when one
+    provider is unavailable — an out-of-credits workspace used to stop the whole
+    factory at the planning step, before a single conversation was touched.
+    """
+
+    def __init__(self, model: str | None = None):
+        self.model = model or _active_model()
 
     def execute(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
-        codex = shutil.which("codex")
-        if codex is None:
-            raise RuntimeError("codex CLI is unavailable")
         with tempfile.TemporaryDirectory(prefix="zen-factory-role-") as directory:
             root = Path(directory)
             schema_path = root / "schema.json"
             output_path = root / "output.json"
+            log_path = root / "role.log"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
-            command = [
-                codex, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-                "--skip-git-repo-check", "--model", self.model, "--sandbox", "read-only",
-                "--cd", str(root), "--output-schema", str(schema_path),
-                "--output-last-message", str(output_path), "-",
-            ]
-            completed = subprocess.run(
-                command, input=prompt, text=True, capture_output=True, check=False, timeout=900
+            result = _run_model(
+                prompt=prompt,
+                schema_path=schema_path,
+                output_path=output_path,
+                log_path=log_path,
+                role="FACTORY_PLANNER",
             )
-            if completed.returncode != 0:
-                raise RuntimeError(
-                    f"isolated Codex role failed with code {completed.returncode}: "
-                    + (completed.stderr or completed.stdout)[-2000:]
-                )
-            result = json.loads(output_path.read_text(encoding="utf-8"))
+        # Provenance the transport stamps on every decision. Useful downstream,
+        # but not part of any role's declared schema, so strip before validating.
+        for field in ("zen_model_provider", "zen_model_id"):
+            result.pop(field, None)
         validate(result, schema)
         return result
 
@@ -316,16 +323,36 @@ def compile_plan(
     )
 
 
+def primary_language(agent: Mapping[str, Any]) -> str:
+    """The language bucket an agent belongs to, e.g. `ta-IN` -> `ta`."""
+    languages = [str(value) for value in agent.get("languages") or [] if value]
+    if not languages:
+        return "unknown"
+    return languages[0].strip().lower().split("-")[0] or "unknown"
+
+
 def shortlist_agents(
-    agents: list[dict[str, Any]], *, limit: int, min_conversations: int
+    agents: list[dict[str, Any]],
+    *,
+    limit: int,
+    min_conversations: int,
+    balance_languages: bool = True,
 ) -> list[dict[str, Any]]:
-    """Bound the agent list the planner sees, keeping domain spread.
+    """Bound the agent list the planner sees, keeping language and domain spread.
 
     A full inventory is tens of thousands of lines of JSON and overruns the
-    model's input limit. The planner only needs a slate to choose from, so keep
-    agents that actually have conversations and round-robin across project and
-    language groups rather than taking the highest-volume agents alone, which
-    would collapse the batch onto a handful of near-identical deployments.
+    model's input limit, so the planner only needs a slate to choose from.
+
+    Which slate matters. Grouping by (project, language) and rotating gives each
+    group equal turns, which reproduces the inventory's own skew: the corpus came
+    out 97% English and Hindi even though the inventory holds hundreds of Tamil,
+    Telugu, Kannada, Marathi, Bengali, Gujarati, Malayalam and Punjabi agents. A
+    model fine-tuned on that learns the majority languages and little else.
+
+    So the rotation is language-first: every language gets a turn before any
+    language gets a second one, and within a language the rotation moves across
+    projects so one deployment cannot fill the quota. Domain spread survives
+    because projects still rotate; language spread is no longer left to chance.
     """
 
     if limit < 1:
@@ -342,26 +369,55 @@ def shortlist_agents(
             key=lambda a: (-int(a.get("conversation_count") or 0), str(a.get("agent_id"))),
         )
         return usable[:limit]
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+    def volume_order(agent: Mapping[str, Any]) -> tuple:
+        return (-int(agent.get("conversation_count") or 0), str(agent.get("agent_id")))
+
+    if not balance_languages:
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for agent in usable:
+            key = (
+                str(agent.get("project_name") or ""),
+                ",".join(sorted(str(v) for v in agent.get("languages") or [])),
+            )
+            groups.setdefault(key, []).append(agent)
+        for bucket in groups.values():
+            bucket.sort(key=volume_order)
+        return _round_robin(groups, sorted(groups, key=lambda k: (-len(groups[k]), k)), limit)
+
+    # Language bucket -> project bucket -> agents, so both rotate.
+    by_language: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for agent in usable:
-        key = (
-            str(agent.get("project_name") or ""),
-            ",".join(sorted(str(v) for v in agent.get("languages") or [])),
-        )
-        groups.setdefault(key, []).append(agent)
-    for bucket in groups.values():
-        bucket.sort(
-            key=lambda a: (-int(a.get("conversation_count") or 0), str(a.get("agent_id")))
-        )
-    ordered_keys = sorted(groups, key=lambda k: (-len(groups[k]), k))
+        projects = by_language.setdefault(primary_language(agent), {})
+        projects.setdefault(str(agent.get("project_name") or ""), []).append(agent)
+
+    ordered: dict[str, list[dict[str, Any]]] = {}
+    for language, projects in by_language.items():
+        for bucket in projects.values():
+            bucket.sort(key=volume_order)
+        # Interleave projects so a single large deployment cannot fill a language.
+        keys = sorted(projects, key=lambda k: (-len(projects[k]), k))
+        ordered[language] = _round_robin(projects, keys, len(usable))
+
+    # Rarest language first, so a small bucket is never crowded out by a big one.
+    language_keys = sorted(ordered, key=lambda k: (len(ordered[k]), k))
+    return _round_robin(ordered, language_keys, limit)
+
+
+def _round_robin(
+    buckets: Mapping[str, list[dict[str, Any]]],
+    order: Sequence[str],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Take one item from each bucket in turn until `limit` is reached."""
     selected: list[dict[str, Any]] = []
     depth = 0
     while len(selected) < limit:
         added = False
-        for key in ordered_keys:
+        for key in order:
             if len(selected) >= limit:
                 break
-            bucket = groups[key]
+            bucket = buckets[key]
             if depth < len(bucket):
                 selected.append(bucket[depth])
                 added = True

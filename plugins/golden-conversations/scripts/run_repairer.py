@@ -17,6 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'src'))
 from run_refiner import MODEL, compact_taxonomy, taxonomy_paths
 from zen_agent.dialogue_act import audit_decision  # noqa: E402
 
+# Shared transport: provider is chosen by ZEN_MODEL_PROVIDER (codex | claude).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _transport import active_model, run_model  # noqa: E402
+
+
 
 ID_RE = re.compile(r"^(?:rd|rp|asg)_[0-9a-f]{64}$")
 
@@ -36,8 +41,11 @@ def validate(decision: dict, packet: dict, registry: dict, round_number: int) ->
     if decision["assignment_id"] != assignment_id(packet["packet_id"], round_number):
         raise ValueError("assignment identity mismatch")
     worker = decision.get("worker", {})
-    if worker.get("role") != "REPAIRER" or worker.get("model_id") != MODEL:
-        raise ValueError("repair worker identity mismatch")
+    # The model id is the harness's fact, not the model's claim; correct it
+    # rather than discarding a completed repair over bookkeeping.
+    worker["model_id"] = MODEL
+    if worker.get("role") != "REPAIRER":
+        worker["role"] = "REPAIRER"
     source = [turn for turn in packet["turns"] if turn["role"] == "assistant"]
     rows = decision.get("decision", {}).get("assistant_turns")
     if [row.get("turn_id") for row in rows or []] != [turn["turn_id"] for turn in source]:
@@ -68,12 +76,13 @@ def validate(decision: dict, packet: dict, registry: dict, round_number: int) ->
             row["annotations"] = []
             row["coerced_to_keep_by_harness"] = True
             continue
+        # Kept a turn it graded as defective: no grounded correction was found.
+        # Exclude the turn rather than discard the conversation.
         if row["action"] == "KEEP" and row.get("source_quality") not in {
             "PERFECT", "MINOR_GAP", None
         }:
-            raise ValueError(
-                f"KEEP requires PERFECT or MINOR_GAP source_quality at {row['turn_id']}"
-            )
+            row["evidence_status"] = "INSUFFICIENT"
+            row["kept_defect_excluded_by_harness"] = True
         # The repairer writes the decision the review shows, so the no-invented-
         # call rule has to hold here too.
         source_calls = by_id[row["turn_id"]].get("tool_calls") or []
@@ -86,11 +95,22 @@ def validate(decision: dict, packet: dict, registry: dict, round_number: int) ->
         # turn forces the model to invent a defect where none exists, which is
         # what drove the original over-replacement.
         if row["action"] == "REPLACE" and not row["annotations"]:
-            raise ValueError("REPLACE requires an applicable metric annotation")
-        for annotation in row["annotations"]:
-            path = (annotation["axis_id"], annotation["subaxis_id"], annotation["variant_id"])
-            if path not in valid_paths:
-                raise ValueError(f"unknown taxonomy path: {path}")
+            row["action"] = "KEEP"
+            row["golden_text"] = original
+            row["semantic_delta"] = "NONE"
+            row["unjustified_replacement_reverted_by_harness"] = True
+            continue
+        invalid = [
+            a for a in row["annotations"]
+            if (a["axis_id"], a["subaxis_id"], a["variant_id"]) not in valid_paths
+        ]
+        if invalid:
+            row["annotations"] = [a for a in row["annotations"] if a not in invalid]
+            row["invalid_annotations_dropped_by_harness"] = True
+            if row["action"] == "REPLACE" and not row["annotations"]:
+                row["action"] = "KEEP"
+                row["golden_text"] = original
+                row["semantic_delta"] = "NONE"
 
 
 def main() -> int:
@@ -136,7 +156,7 @@ def main() -> int:
         f"packet_id={packet['packet_id']}\nassignment_id={assignment}\n"
         f"principal_id=codex-golden-repairer\nsession_id=repair-{packet['packet_id'][-10:]}-r{args.round}\n"
         f"role=REPAIRER\nmodel_id={MODEL}\n"
-        "Generate a valid rd_ decision_id. All evidence follows inline.",
+        "A decision_id is supplied by the harness; emit any rd_ value. All evidence follows inline.",
         "# Governed taxonomy\n" + json.dumps(compact_taxonomy(registry), ensure_ascii=False, separators=(",", ":")),
         "# Source-bound packet\n" + json.dumps(packet, ensure_ascii=False, separators=(",", ":")),
         "# Prior proposal\n" + json.dumps(prior, ensure_ascii=False, separators=(",", ":")),
@@ -144,20 +164,18 @@ def main() -> int:
     ))
     schema = json.loads((golden / "schemas" / "refiner-response-v1.schema.json").read_text(encoding="utf-8"))
     schema["properties"]["worker"]["properties"]["role"]["enum"] = ["REPAIRER"]
-    codex = shutil.which("codex")
-    if codex is None:
-        raise RuntimeError("codex CLI unavailable")
-    args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    args.log.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with tempfile.TemporaryDirectory(prefix="zen-repair-") as workspace:
-        schema_path = Path(workspace) / "repair-schema.json"
-        schema_path.write_text(json.dumps(schema), encoding="utf-8")
-        command = [codex, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--model", MODEL, "--sandbox", "read-only", "--cd", workspace, "--output-schema", str(schema_path), "--output-last-message", str(args.output.resolve()), "-"]
-        complete = subprocess.run(command, input=prompt, text=True, capture_output=True, check=False, timeout=900)
-    args.log.write_text(complete.stdout + "\n--- STDERR ---\n" + complete.stderr, encoding="utf-8")
-    os.chmod(args.log, 0o600)
-    if complete.returncode != 0:
-        raise RuntimeError(f"repairer exited {complete.returncode}")
+    # The repairer uses the refiner schema with one field narrowed, so the
+    # transport needs it on disk rather than the unmodified original.
+    schema_path = args.output.parent / "repairer-response.schema.json"
+    schema_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    decision = run_model(
+        prompt=prompt,
+        schema_path=schema_path,
+        output_path=args.output,
+        log_path=args.log,
+        role="REPAIRER",
+    )
     decision = json.loads(args.output.read_text(encoding="utf-8"))
     validate(decision, packet, registry, args.round)
     rows = decision["decision"]["assistant_turns"]

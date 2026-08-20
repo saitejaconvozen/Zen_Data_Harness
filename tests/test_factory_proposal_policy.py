@@ -19,7 +19,11 @@ def proposal(**overrides):
 
 
 class ProposalPolicyTests(unittest.TestCase):
-    """The refiner maximises turn quality; divergence excludes turns, not packets."""
+    """A conversation is discarded only when too little of it survives.
+
+    Every other concern — an incoherent prompt, an abstaining verifier, turns we
+    cannot assess — excludes turns and sends the rest to a human.
+    """
 
     def classify(self, decision, prop, **kwargs):
         return FactoryWorker._classify_proposal(decision, prop, **kwargs)
@@ -36,15 +40,24 @@ class ProposalPolicyTests(unittest.TestCase):
         self.assertEqual(status, "PARTIAL_CANDIDATE")
         self.assertIn("2 of 6 turns excluded", reason)
 
-    def test_fully_divergent_conversation_is_quarantined(self) -> None:
-        status, _ = self.classify(
-            "PASS", proposal(assistant_turns=2, divergent_turns=["a", "b"])
+    def test_too_few_surviving_turns_is_quarantined(self) -> None:
+        status, reason = self.classify(
+            "PASS", proposal(assistant_turns=6,
+                             divergent_turns=["a", "b", "c", "d"]),
         )
         self.assertEqual(status, "QUARANTINED")
+        self.assertIn("are usable", reason)
 
-    def test_unusable_prompt_quarantines_regardless_of_verdict(self) -> None:
-        status, _ = self.classify("PASS", proposal(prompt_usable=False))
+    def test_a_conversation_shorter_than_the_minimum_is_quarantined(self) -> None:
+        status, reason = self.classify("PASS", proposal(assistant_turns=2))
         self.assertEqual(status, "QUARANTINED")
+        self.assertIn("minimum", reason)
+
+    def test_incoherent_prompt_no_longer_discards_the_conversation(self) -> None:
+        """A human can still judge the turns; the prompt issue is recorded."""
+        status, reason = self.classify("PASS", proposal(prompt_usable=False))
+        self.assertEqual(status, "PARTIAL_CANDIDATE")
+        self.assertIn("coherence", reason)
 
     def test_advisory_quarantine_prose_no_longer_discards_the_packet(self) -> None:
         """Turn-scoped prose used to veto whole conversations. It is advisory now."""
@@ -75,9 +88,10 @@ class ProposalPolicyTests(unittest.TestCase):
         )
         self.assertIn("1 of 6 turns excluded", reason)
 
-    def test_whole_conversation_blocker_quarantines(self) -> None:
-        status, _ = self.classify("PASS", proposal(conversation_assessable=False))
-        self.assertEqual(status, "QUARANTINED")
+    def test_abstain_is_salvaged_for_human_review(self) -> None:
+        status, reason = self.classify("ABSTAIN", proposal())
+        self.assertEqual(status, "PARTIAL_CANDIDATE")
+        self.assertIn("ABSTAIN", reason)
 
     def test_fail_routes_to_repair(self) -> None:
         status, _ = self.classify("FAIL", proposal())
@@ -88,10 +102,7 @@ class ProposalPolicyTests(unittest.TestCase):
         status, _ = self.classify("FAIL", proposal(divergent_turns=["turn_0003"]))
         self.assertEqual(status, "REPAIR")
 
-    def test_abstain_quarantines(self) -> None:
-        status, reason = self.classify("ABSTAIN", proposal())
-        self.assertEqual(status, "QUARANTINED")
-        self.assertIn("ABSTAIN", reason)
+
 
     def test_repair_stage_is_named_in_the_reason(self) -> None:
         _, reason = self.classify("PASS", proposal(), repaired=True)

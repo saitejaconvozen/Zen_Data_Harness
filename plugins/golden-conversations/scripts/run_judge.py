@@ -101,7 +101,9 @@ def judge(case: dict, packet_id: str, golden_root: Path, timeout: int = 900) -> 
             )
         decision = json.loads(output.read_text(encoding="utf-8"))
     worker = decision.get("worker", {})
-    if worker.get("role") != "JUDGE" or worker.get("model_id") != MODEL:
+    # The model id is the harness's fact, not the model's claim.
+    worker["model_id"] = MODEL
+    if worker.get("role") != "JUDGE":
         raise ValueError("judge worker identity mismatch")
     expected = {t["turn_id"] for t in case["changed_turns"]}
     seen = {t["turn_id"] for t in decision["judgement"]["turns"]}

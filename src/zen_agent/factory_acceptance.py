@@ -375,6 +375,7 @@ def evaluate_review_document(
 
     terminal_statuses = {
         "VERIFIED_CANDIDATE", "PARTIAL_CANDIDATE", "QUARANTINED", "REJECTED_SOURCE",
+        "NOT_SELECTED",
     }
     terminal_count = 0
     verified_count = 0
