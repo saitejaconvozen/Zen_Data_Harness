@@ -9,7 +9,7 @@ from typing import Any, Callable
 from .agent_manifests import AgentCatalog, AgentManifest
 from .agent_protocol import ACTION_SCHEMA, PLAN_SCHEMA, VERDICT_SCHEMA, AgentAction
 from .coding_state import CodingStateStore
-from .coding_tools import coding_tool_catalog, register_coding_tools
+from .coding_tools import register_coding_tools
 from .config import PINNED_MODEL
 from .context import WorkspaceContextCompiler
 from .hooks import HookConfig, HookResult, HookRunner
@@ -87,6 +87,28 @@ class CodingRuntime:
         # contracts. Which of them any agent may actually call is still bounded
         # by its manifest's `tools:` allowlist.
         register_data_tools(self.tools)
+
+    def tool_catalog(self, names: set[str] | None = None) -> list[dict[str, Any]]:
+        """Describe the registered tools a model is allowed to choose from.
+
+        Built from the live registry rather than a fixed list. The delegate path
+        used a coding-only catalog, so an agent whose manifest allowed `data.*`
+        was still shown nothing but `fs.*` — and a model can only pick what it
+        is shown. It searched the filesystem for conversation data that lives in
+        SQLite.
+        """
+        catalog = []
+        for name in sorted(self.tools.names()):
+            if names is not None and name not in names:
+                continue
+            spec = self.tools.get(name)
+            catalog.append({
+                "name": spec.name,
+                "description": spec.description,
+                "risk": spec.risk.value,
+                "input_schema": spec.input_schema,
+            })
+        return catalog
 
     def start(self, objective: str) -> str:
         identifier = self.state.create_session(
@@ -396,7 +418,7 @@ class CodingRuntime:
                 + "\n\n# Delegated investigation\n"
                 + item["objective"]
                 + "\nUse only these read-only tools:\n"
-                + json.dumps([entry for entry in coding_tool_catalog() if entry["name"] in allowed])
+                + json.dumps(self.tool_catalog(allowed))
                 + "\nObservations:\n"
                 + json.dumps(observations[-8:])
                 + "\nReturn final when you have evidence. Do not request edits."
@@ -619,7 +641,7 @@ class CodingRuntime:
         cycle: int,
         turn_number: int,
     ) -> str:
-        catalog = [item for item in coding_tool_catalog() if item["name"] in allowed_tools]
+        catalog = self.tool_catalog(set(allowed_tools))
         return self._bounded(
             context
             + "\n\n# Execution state\n"

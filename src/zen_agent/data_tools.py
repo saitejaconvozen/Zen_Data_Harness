@@ -152,7 +152,15 @@ def _read_conversation(context: ToolContext, inputs: dict[str, Any]) -> dict[str
     source_id = str(inputs["source_id"])
     review = build_review(context.workspace, run_id)
     for conversation in review["conversations"]:
-        if source_id not in (conversation["source_id"], conversation["source_id_full"]):
+        # Accept whichever identifier the caller has. An agent reading the
+        # ledgers sees packet_ids; a reviewer reading the site sees short
+        # source ids. Refusing one of them just costs a turn to discover.
+        identifiers = {
+            conversation.get("source_id"),
+            conversation.get("source_id_full"),
+            conversation.get("packet_id"),
+        }
+        if source_id not in identifiers:
             continue
         turns = [
             {
@@ -174,7 +182,10 @@ def _read_conversation(context: ToolContext, inputs: dict[str, Any]) -> dict[str
             "iterations": conversation.get("iterations"),
             "turns": turns,
         }
-    raise KeyError(f"conversation {source_id} not found in run {run_id}")
+    raise KeyError(
+        f"conversation {source_id} not found in run {run_id}; pass a source_id "
+        "or packet_id from data.failure_clusters or data.query_ledgers"
+    )
 
 
 def _contract_path(workspace: Path, relative: str) -> Path:
@@ -272,7 +283,7 @@ def data_tool_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             "data.read_conversation", "0.1.0",
-            "Read one conversation's source turns beside every decision made about it",
+            "Read one conversation's turns and decisions, by source_id or packet_id",
             ToolRisk.READ_ONLY,
             {"type": "object", "required": ["run_id", "source_id"], "additionalProperties": False,
              "properties": {"run_id": string, "source_id": string}},

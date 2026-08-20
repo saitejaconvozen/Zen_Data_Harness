@@ -29,6 +29,12 @@ DEFAULT_BASE_URL = "http://127.0.0.1:4000"
 
 def _first_json_object(text: str) -> str:
     """Extract the first balanced {...} block, ignoring any surrounding prose."""
+    if not isinstance(text, str):
+        # Providers return a null content field for a truncated or
+        # reasoning-only turn. Passing that straight to the parser raised
+        # AttributeError out of the adapter and killed the whole agent run,
+        # rather than being retried like any other malformed response.
+        raise ValueError(f"response carried no text content (got {type(text).__name__})")
     start = text.find("{")
     if start < 0:
         raise ValueError("no JSON object in response")
@@ -167,7 +173,14 @@ class LiteLLMAdapter:
 
             self.calls += 1
             try:
-                content = payload["choices"][0]["message"]["content"]
+                choice = payload["choices"][0]
+                content = choice["message"]["content"]
+                if not isinstance(content, str) or not content.strip():
+                    reason = choice.get("finish_reason") or "unknown"
+                    raise ValueError(
+                        f"empty content (finish_reason={reason}); the response was "
+                        "likely truncated — return a shorter object"
+                    )
                 value = json.loads(_first_json_object(content))
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 last_error = f"response was not usable JSON: {exc}"

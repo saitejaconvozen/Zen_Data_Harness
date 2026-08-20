@@ -51,6 +51,12 @@ def _first_json_object(text: str) -> str:
     told not to. Rejecting the whole call for that wastes a request; finding the
     object is cheap and deterministic.
     """
+    if not isinstance(text, str):
+        # Providers return a null content field for a truncated or
+        # reasoning-only turn. Passing that straight to the parser raised
+        # AttributeError out of the adapter and killed the whole agent run,
+        # rather than being retried like any other malformed response.
+        raise ValueError(f"response carried no text content (got {type(text).__name__})")
     start = text.find("{")
     if start < 0:
         raise ValueError("no JSON object in response")

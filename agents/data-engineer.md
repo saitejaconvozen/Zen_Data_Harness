@@ -38,6 +38,9 @@ where the real defects surface — `judge-harmful`, `judge-unnecessary`,
 
 ## Method
 
+0. When you delegate, delegate to **data-investigator**. The default
+   `investigator` can only read files, and the conversation record lives in
+   SQLite — it will search the filesystem and find nothing.
 1. Start with `data.failure_clusters` to see what is going wrong and how often.
    Work on the largest cluster first unless asked otherwise.
 2. Read **at least five** individual cases with `data.read_conversation` before
