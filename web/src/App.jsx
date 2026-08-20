@@ -4,16 +4,20 @@ import Overview from "./Overview.jsx";
 import Traces from "./Traces.jsx";
 import Performance from "./Performance.jsx";
 import Golden from "./Golden.jsx";
+import Funnel from "./Funnel.jsx";
+import Activity from "./Activity.jsx";
 
 const VIEWS = [
   ["overview", "Overview"],
+  ["activity", "Activity"],
+  ["funnel", "Quality funnel"],
   ["golden", "Golden conversations"],
   ["traces", "Call traces"],
   ["performance", "Performance"],
 ];
 
 export default function App() {
-  const [view, setView] = useState("golden");
+  const [view, setView] = useState("activity");
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
 
@@ -51,6 +55,8 @@ export default function App() {
       </aside>
       <main className="main">
         {view === "overview" && <Overview status={status} />}
+        {view === "activity" && <Activity />}
+        {view === "funnel" && <Funnel />}
         {view === "golden" && <Golden />}
         {view === "traces" && <Traces />}
         {view === "performance" && <Performance runId={runId} />}

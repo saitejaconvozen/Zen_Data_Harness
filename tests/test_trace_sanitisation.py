@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import unittest
 
+from pathlib import Path
+
 from zen_agent.adapters.mongodb import bind_conversation, sanitise_turn
 
 
@@ -116,3 +118,47 @@ class BindSanitisationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DialogueRoleTests(unittest.TestCase):
+    """A demoted turn must leave the dialogue everywhere, not just at binding.
+
+    `build_review` dispatches on role and treated anything that was not `tool`
+    or `user` as an assistant turn. Sanitisation demotes scaffolding to
+    `runtime_metadata`, so those turns reappeared downstream as assistant turns
+    carrying an empty string — 1,368 of them. For SFT every assistant turn is a
+    training target, so that is 1,368 examples teaching the model to say nothing.
+    """
+
+    def test_only_conversation_roles_are_dialogue(self) -> None:
+        from zen_agent.factory_review import is_dialogue_turn
+
+        for role in ("user", "assistant", "tool"):
+            self.assertTrue(is_dialogue_turn({"role": role}), role)
+        for role in ("runtime_metadata", "system", "", None, "future_role"):
+            self.assertFalse(is_dialogue_turn({"role": role}), repr(role))
+
+    def test_no_dialogue_turn_survives_binding_empty(self) -> None:
+        """After binding, every turn still counted as dialogue carries speech.
+
+        This is the property that matters for SFT: an assistant turn with no
+        text is a training example that teaches the model to answer with
+        nothing.
+        """
+        from zen_agent.factory_review import is_dialogue_turn
+
+        packet = bind_conversation(conversation(
+            ("assistant", "[voice] <session_metadata><a>1</a></session_metadata>"),
+            ("user", "User didn't respond to the above message"),
+            ("assistant", "<|ENGLISH|> hello there"),
+            *exchanges(3),
+        ))
+        dialogue = [t for t in packet["turns"] if is_dialogue_turn(t)]
+        self.assertTrue(dialogue)
+        for turn in dialogue:
+            self.assertTrue(
+                turn["text"].strip() or turn.get("tool_calls"),
+                f"empty {turn['role']} turn at index {turn['source_index']}",
+            )
+
+

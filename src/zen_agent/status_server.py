@@ -844,6 +844,76 @@ def main(argv: list[str] | None = None) -> int:
                     json.dumps(snapshot(root, args.run_id)).encode("utf-8"),
                     "application/json",
                 )
+            elif path == "/api/activity":
+                # A live tail of what the harness is doing right now. The queue
+                # records outcomes and metrics.db records model calls; neither
+                # alone answers "is it working, and on what". Joined here so a
+                # stalled run is visible as an absence rather than inferred.
+                from .observability import MetricsStore
+
+                store = MetricsStore(root / ".zen" / "metrics.db")
+                try:
+                    recent = store.db.execute(
+                        """SELECT run_id, role, model, packet_id, latency_ms,
+                                  attempts, outcome, error_class, started_at
+                           FROM model_calls WHERE run_id=?
+                           ORDER BY started_at DESC LIMIT 60""",
+                        (args.run_id,),
+                    ).fetchall()
+                    calls = [dict(row) for row in recent]
+                    rate = store.throughput(args.run_id, 300)
+                    roles = store.by_role(args.run_id)
+                finally:
+                    store.close()
+
+                queue = sqlite3.connect(
+                    f"file:{root / '.zen' / 'factory-queue.db'}?mode=ro", uri=True)
+                try:
+                    queue.row_factory = sqlite3.Row
+                    stages = [
+                        dict(row) for row in queue.execute(
+                            "SELECT stage, status, COUNT(*) n FROM factory_work "
+                            "WHERE run_id=? GROUP BY stage, status ORDER BY stage",
+                            (args.run_id,))
+                    ]
+                    dead = [
+                        dict(row) for row in queue.execute(
+                            "SELECT stage, error, updated_at FROM factory_work "
+                            "WHERE run_id=? AND status='DEAD' "
+                            "ORDER BY updated_at DESC LIMIT 12", (args.run_id,))
+                    ]
+                finally:
+                    queue.close()
+
+                self._send(json.dumps({
+                    "run_id": args.run_id,
+                    "generated_at": time.time(),
+                    "calls": calls,
+                    "throughput": rate,
+                    "by_role": roles,
+                    "stages": stages,
+                    "dead": dead,
+                }).encode("utf-8"), "application/json")
+            elif path == "/api/funnel":
+                # Where conversations are lost between MongoDB and the training
+                # set. The target is a number of good conversations, not a
+                # number of fetches, so attrition has to be visible per stage.
+                from .dispatch_export import RELEASABLE, conversation_record
+                from .funnel import build as build_funnel
+
+                review = _review(root, args.run_id)
+                records = []
+                for conversation in review["conversations"]:
+                    if (conversation.get("terminal") or {}).get("status") not in RELEASABLE:
+                        continue
+                    record = conversation_record(conversation, args.run_id)
+                    if record is not None:
+                        record.pop("_citations", None)
+                        records.append(record)
+                self._send(
+                    json.dumps(build_funnel(root, args.run_id, records)).encode("utf-8"),
+                    "application/json",
+                )
             elif path == "/api/golden":
                 # The dispatch view: exchanges paired by call direction, every
                 # correction resolved to its axis/sub-axis/variant by name.

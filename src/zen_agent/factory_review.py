@@ -45,6 +45,19 @@ def _taxonomy(root: Path) -> dict[tuple[str, str, str], dict[str, str]]:
     return names
 
 
+# Roles that are part of the conversation. Everything else — scaffolding the
+# sanitiser demoted, future roles nobody has thought of — is excluded rather
+# than falling through to the assistant branch. For SFT every assistant turn is
+# a training target, so a fall-through does not produce a cosmetic glitch: it
+# produces training examples that teach the model to answer with nothing.
+DIALOGUE_ROLES = frozenset({"user", "assistant", "tool"})
+
+
+def is_dialogue_turn(turn: dict[str, Any]) -> bool:
+    """Whether this turn belongs in the conversation at all."""
+    return turn.get("role") in DIALOGUE_ROLES
+
+
 def _packet(sample: dict[str, Any], cache: dict[str, list[dict]]) -> dict:
     path = sample["packet_batch"]
     if path not in cache:
@@ -231,6 +244,13 @@ def build_review(root: Path, run_id: str) -> dict[str, Any]:
         )
         output_turns = []
         for turn in packet["turns"]:
+            # Scaffolding the sanitiser demoted out of the dialogue. Anything not
+            # explicitly handled below falls through to the assistant branch, so
+            # without this these render as assistant turns with empty text — and
+            # for SFT every assistant turn is a training target. 1,368 of them
+            # would have taught the model to answer with nothing.
+            if not is_dialogue_turn(turn):
+                continue
             if turn["role"] == "tool":
                 output_turns.append({
                     "turn_id": turn["turn_id"], "role": "tool",

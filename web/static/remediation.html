@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zen Harness Remediation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --paper: #eef0f2; --surface: #f7f8f9; --ink: #101720; --ink-soft: #4a5560;
+    --rule: #b9c0c8; --rule-faint: #d7dce0;
+    --amber: #b8690f; --amber-wash: #f2e3cf;
+    --teal: #1f6b5c; --rust: #94331f; --violet: #4a3f78;
+    --measure: 68ch;
+    --step--1: .812rem; --step-0: 1rem; --step-1: 1.24rem;
+    --step-2: 1.55rem; --step-3: 2.1rem; --step-4: 2.9rem;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", ui-sans-serif, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0e141b; --surface: #151d26; --ink: #dde4ea; --ink-soft: #93a1ad;
+      --rule: #33414f; --rule-faint: #223040;
+      --amber: #e79a3c; --amber-wash: #2c2214;
+      --teal: #52b39c; --rust: #d4735a; --violet: #a094d8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0e141b; --surface: #151d26; --ink: #dde4ea; --ink-soft: #93a1ad;
+    --rule: #33414f; --rule-faint: #223040;
+    --amber: #e79a3c; --amber-wash: #2c2214;
+    --teal: #52b39c; --rust: #d4735a; --violet: #a094d8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+         font-family: var(--sans); font-size: var(--step-0); line-height: 1.6;
+         -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1080px; margin: 0 auto;
+          padding: clamp(28px,5vw,60px) clamp(18px,4vw,40px) 90px;
+          display: flex; flex-direction: column; gap: 46px; }
+
+  .stamp { font-family: var(--mono); font-size: var(--step--1); letter-spacing: .14em;
+           text-transform: uppercase; color: var(--amber);
+           display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  .stamp span::before { content: "▪ "; color: var(--rule); }
+  h1 { font-family: var(--cond); font-weight: 700; font-size: var(--step-4);
+       line-height: 1.03; letter-spacing: -.015em; margin: 0; text-wrap: balance; }
+  .standfirst { max-width: var(--measure); color: var(--ink-soft);
+                font-size: var(--step-1); line-height: 1.5; margin: 0; text-wrap: pretty; }
+  .rule { height: 2px; background: var(--ink); }
+
+  section { display: flex; flex-direction: column; gap: 16px; }
+  h2 { font-family: var(--cond); font-weight: 600; font-size: var(--step-2);
+       margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+  h3 { font-family: var(--cond); font-weight: 600; font-size: var(--step-1);
+       margin: 0; letter-spacing: -.005em; }
+  p, li { max-width: var(--measure); text-wrap: pretty; }
+  p { margin: 0; }
+  ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+  code { font-family: var(--mono); font-size: .88em;
+         background: var(--amber-wash); padding: .1em .34em; }
+  .mono { font-family: var(--mono); }
+
+  .verdict { border: 2px solid var(--ink); background: var(--surface);
+             padding: 20px 22px; display: flex; flex-direction: column; gap: 10px; }
+  .verdict h2 { font-size: var(--step-1); }
+
+  .sheet { overflow-x: auto; border: 1px solid var(--rule); }
+  table { width: 100%; border-collapse: collapse; font-size: var(--step--1);
+          background: var(--surface); }
+  th { font-family: var(--mono); font-weight: 500; font-size: .7rem;
+       letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft);
+       text-align: left; padding: 10px 13px; border-bottom: 2px solid var(--ink);
+       white-space: nowrap; }
+  td { padding: 10px 13px; border-bottom: 1px solid var(--rule-faint); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.k { font-family: var(--mono); white-space: nowrap; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+
+  .phase { border-left: 3px solid var(--rule); padding-left: 18px;
+           display: flex; flex-direction: column; gap: 20px; }
+  .phase.now { border-left-color: var(--rust); }
+  .phase.next { border-left-color: var(--amber); }
+  .phase.then { border-left-color: var(--teal); }
+  .phase-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+  .phase-head .when { font-family: var(--mono); font-size: .7rem; letter-spacing: .12em;
+                      text-transform: uppercase; color: var(--ink-soft); }
+
+  .step { background: var(--surface); border: 1px solid var(--rule);
+          padding: 16px 18px; display: flex; flex-direction: column; gap: 9px; }
+  .step-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
+  .step-head .n { font-family: var(--mono); color: var(--amber); font-weight: 600;
+                  font-size: var(--step--1); }
+  .step .why { color: var(--ink-soft); font-size: var(--step--1); }
+  .step pre { margin: 0; overflow-x: auto; background: var(--paper);
+              border: 1px solid var(--rule-faint); padding: 10px 12px;
+              font-family: var(--mono); font-size: .78rem; line-height: 1.5; }
+  .tag { font-family: var(--mono); font-size: .68rem; letter-spacing: .1em;
+         text-transform: uppercase; padding: 2px 8px; border: 1px solid var(--rule);
+         border-radius: 99px; color: var(--ink-soft); }
+  .tag.data { color: var(--violet); border-color: color-mix(in srgb, var(--violet) 40%, var(--rule)); }
+  .tag.eng { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 40%, var(--rule)); }
+  .tag.gov { color: var(--rust); border-color: color-mix(in srgb, var(--rust) 40%, var(--rule)); }
+
+  .callout { border: 1px solid var(--amber);
+             background: color-mix(in srgb, var(--amber-wash) 60%, var(--surface));
+             padding: 14px 16px; }
+  .callout p { max-width: none; font-size: var(--step--1); }
+
+  footer { border-top: 2px solid var(--ink); padding-top: 18px;
+           color: var(--ink-soft); font-size: var(--step--1); max-width: var(--measure); }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+<header style="display:flex;flex-direction:column;gap:14px">
+  <div class="stamp">
+    <span>Remediation plan</span><span>Audited 2026-08-20</span><span>Data engine + agent loop</span>
+  </div>
+  <h1>Zen Harness Remediation</h1>
+  <div class="rule"></div>
+  <p class="standfirst">
+    What is wrong, in the order it should be fixed — across the data engine, the
+    engineering around it, and the agent loop. Nothing here defends the current
+    codebase; every item was found by reading it or measuring its output.
+  </p>
+</header>
+
+<div class="verdict">
+  <h2>The verdict</h2>
+  <p>
+    This is strong prototype engineering and it is not yet an organization's
+    harness. The difference is not sophistication — the model boundary, the
+    provenance chain and the coercion markers are better than a lot of
+    production ML tooling. The difference is that an org harness assumes
+    <em>nobody is watching</em>. CI catches what a person misses, containers make
+    it run elsewhere, logs explain failures nobody saw, retention satisfies a
+    lawyer. This codebase currently assumes a person at a terminal.
+  </p>
+  <p>
+    In one day, three separate instruments confidently reported false state: a
+    supervisor called a crash-loop healthy, a metrics recorder reported a busy
+    pipeline idle, and a diagram misdescribed the pipeline it documented. All
+    three shared a shape — <b>nothing in the build could contradict them</b>.
+  </p>
+</div>
+
+<section>
+  <h2>What the audit found</h2>
+  <div class="sheet">
+    <table>
+      <thead><tr><th>Area</th><th>Finding</th><th class="num">Measured</th></tr></thead>
+      <tbody>
+        <tr><td class="k">CI</td><td>No workflow. 261 tests run only when a person runs them.</td><td class="num">0</td></tr>
+        <tr><td class="k">dependencies</td><td><code>dependencies = []</code>, no lockfile, no container. Install is unreproducible.</td><td class="num">0 pinned</td></tr>
+        <tr><td class="k">logging</td><td><code>print()</code> everywhere, no <code>logging</code> module, no levels or structure.</td><td class="num">125 / 0</td></tr>
+        <tr><td class="k">error handling</td><td><code>except: pass</code> swallows. Two of today's worst bugs were invisible because of these.</td><td class="num">12</td></tr>
+        <tr><td class="k">types</td><td>Fully annotated, no <code>py.typed</code>, no checker. Cost without benefit.</td><td class="num">72 files</td></tr>
+        <tr><td class="k">migrations</td><td><code>CREATE TABLE IF NOT EXISTS</code> only. Adding a column silently breaks old databases.</td><td class="num">11 modules</td></tr>
+        <tr><td class="k">resilience</td><td>No circuit breaker, no rate limiting. Six hours of retrying a billing error.</td><td class="num">0</td></tr>
+        <tr><td class="k">tests</td><td>Twelve test files assert on source code as strings. They pass when behaviour breaks.</td><td class="num">12 / 20</td></tr>
+        <tr><td class="k">docs</td><td><code>GUIDE.md</code> mentions litellm, gemini, sanitise, dispatch, observability zero times.</td><td class="num">0 hits</td></tr>
+        <tr><td class="k">governance</td><td>No PII redaction in <code>src/</code>, no deletion path, one shared token, no backups.</td><td class="num">0</td></tr>
+        <tr><td class="k">dead weight</td><td>Agent kernel the factory never imports.</td><td class="num">3,456 lines</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>And three findings about the data itself</h2>
+
+  <div class="callout">
+    <p>
+      <b>90% of the corpus carries no metric signal.</b> 661 corrected turns all
+      cite a rule — that part works perfectly. But 6,501 kept turns were never
+      scored against anything. The eval taxonomy justifies <em>changes</em>; it
+      does not describe the data.
+    </p>
+  </div>
+
+  <div class="callout">
+    <p>
+      <b>Tool-calling turns are barely refined.</b> Of 271 turns carrying a tool
+      call, only 17 were corrected — and 71 say something like
+      <span class="mono">"hmm"</span> or <span class="mono">"one minute"</span>
+      while invoking <span class="mono">get_bookings_by_pnr</span>. Train on that
+      and the model learns to grunt while calling tools. Only 17% of
+      conversations contain any tool call at all.
+    </p>
+  </div>
+
+  <div class="callout">
+    <p>
+      <b>Agent selection does not do what you asked.</b> It currently rotates by
+      language to spread the corpus. You asked for highest-conversation-count
+      first. These genuinely conflict: high-volume agents are production-proven
+      but concentrate the corpus on a few deployments. The plan resolves it
+      rather than silently picking one.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>The agent loop, measured against Claude Code and Codex</h2>
+  <p>
+    The mill is deterministic and works. The agent above it exists to investigate
+    the mill, and has completed exactly one real run in its life. That run spent
+    seven turns searching the filesystem for data that lives in SQLite, and
+    reached no conclusion. The reasons are structural, not incidental.
+  </p>
+
+  <div class="sheet">
+    <table>
+      <thead><tr><th>Capability</th><th>Here</th><th>Consequence</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">parallel tool calls</td>
+          <td><b>absent</b> — <code>"tool": string|null</code>, one per turn</td>
+          <td>Investigating a cluster needs six serial round trips instead of two. With
+              <span class="mono">max_turns: 20</span> a third of the budget goes on I/O.</td>
+        </tr>
+        <tr>
+          <td class="k">context compaction</td>
+          <td><b>absent</b> — hard truncation only</td>
+          <td><code>value[:max_chars]</code> cuts mid-sentence, mid-JSON. The most
+              recently appended material is what gets destroyed.</td>
+        </tr>
+        <tr>
+          <td class="k">rolling state</td>
+          <td><b>absent</b> — <code>observations[-8:]</code></td>
+          <td>At 40 turns the agent sees the last 8 observations and nothing from
+              turns 1–32. No summary. It cannot know what it already tried.</td>
+        </tr>
+        <tr>
+          <td class="k">tool result bounding</td>
+          <td><b>absent</b> — results inlined raw</td>
+          <td><span class="mono">query_ledgers</span> can return 400 KB into a 120 KB
+              budget, silently evicting the objective and every prior finding.</td>
+        </tr>
+        <tr>
+          <td class="k">token accounting</td>
+          <td><b>absent</b> — budgets in characters</td>
+          <td>A measured language bias. See below.</td>
+        </tr>
+        <tr>
+          <td class="k">streaming</td>
+          <td><b>absent</b></td>
+          <td>A ten-minute agent turn is a black box.</td>
+        </tr>
+        <tr>
+          <td class="k">interrupt / steer</td>
+          <td><b>absent</b></td>
+          <td>A running agent cannot be redirected.</td>
+        </tr>
+        <tr>
+          <td class="k">tool retry</td>
+          <td><b>absent</b></td>
+          <td>One transient failure ends that investigation path.</td>
+        </tr>
+        <tr>
+          <td class="k">plan tracking</td>
+          <td><b>absent</b> — <code>PLAN_SCHEMA</code> exists, never updated</td>
+          <td>No todo state carried between turns.</td>
+        </tr>
+        <tr>
+          <td class="k">graph engine</td>
+          <td><b>dead</b> — 205 lines, 0 imports, 0 graphs</td>
+          <td><span class="mono">zen-graph</span> is a shipped entry point for a
+              subsystem nothing uses. Delete it.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <p>
+      <b>Character budgets are a language bias, and it is measurable.</b> Every
+      budget in the agent loop counts characters
+      (<span class="mono">max_prompt_chars = 120_000</span>); nothing counts
+      tokens. Measured across the corpus: English 1.05 bytes/char, Hindi 1.29,
+      Bengali 1.48, <b>Malayalam 1.62</b>. The same nominal budget is a
+      materially smaller budget for Indic languages — the agent's effective
+      context silently shrinks for exactly the languages the corpus was widened
+      to include.
+    </p>
+  </div>
+
+  <p>
+    <b>What is genuinely right, briefly.</b> Memory is wired and read back
+    (<code>read_curated()</code>, <code>query(scope="project")</code>).
+    Delegation runs in parallel. <code>PreToolUse</code> / <code>PostToolUse</code>
+    hooks can block a call. Manifest allowlists and tool-call budgets are
+    enforced. Sessions persist and resume. That is a real skeleton — roughly
+    Claude Code in its first month.
+  </p>
+
+  <div class="verdict" style="margin-top:6px">
+    <h2>And the harder conclusion</h2>
+    <p>
+      <b>The agent is not on the critical path, and fixing it is the wrong next
+      investment.</b> The four missing capabilities are one refactor of the same
+      loop — perhaps a week — and they buy you a better debugging assistant.
+      They buy the <em>corpus</em> nothing.
+    </p>
+    <p>
+      Meanwhile 90% of the corpus carries no metric signal, tool-calling turns
+      say <span class="mono">"hmm"</span> while invoking a backend, and no eval
+      loop proves any of it improves a model. For an organization preparing
+      training data, that ordering is not close.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>Phase 1 — Stop-ship</h2>
+  <div class="phase now">
+    <div class="phase-head"><h3>Nothing else matters until these land</h3>
+      <span class="when">~2 days</span></div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">1.1</span><b>Continuous integration</b><span class="tag eng">engineering</span></div>
+      <p class="why">Every guard written this week protects nothing on a branch nobody is looking at. This is the single highest-value item in the plan.</p>
+      <pre>.github/workflows/ci.yml
+  - python -m unittest discover -s tests -q
+  - ruff check src plugins tests
+  - mypy src/zen_agent
+  - python scripts/check_page.py web/static/architecture.html
+  on: [push, pull_request]</pre>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">1.2</span><b>Reproducible environment</b><span class="tag eng">engineering</span></div>
+      <p class="why">The harness needs codex, claude, cloudflared, litellm, Node 18 and a specific venv layout. None of that is declared. It runs here and probably nowhere else.</p>
+      <pre>pyproject.toml   → real dependency list, version bounds
+uv.lock          → committed
+Dockerfile       → python 3.12 + node 20 + pinned CLIs
+make test / run / console</pre>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">1.3</span><b>PII policy and a deletion path</b><span class="tag gov">governance</span></div>
+      <p class="why">You process <span class="mono">RESTRICTED_SOURCE_NOT_DEIDENTIFIED</span> calls. A deletion request cannot currently be honoured — there is no way to find one customer across queue, artifacts, packets, datasets and dispatch batches.</p>
+      <pre>zen-forget --source-id &lt;sha256&gt;   # every store, one command
+decide: redact spoken phone numbers, or accept and document why
+LICENSE + SECURITY.md on a public repo</pre>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Phase 2 — Make the data defensible</h2>
+  <div class="phase next">
+    <div class="phase-head"><h3>The three things you named, plus the one that validates them</h3>
+      <span class="when">~1 week</span></div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">2.1</span><b>The eval loop</b><span class="tag data">data</span></div>
+      <p class="why">Still the largest gap in the system. Nothing answers whether a model trained on this improves, so every quality claim — including all of mine — is unfalsifiable. Today proved the cost: every automated gate passed while half the corpus carried turns that were not speech.</p>
+      <pre>1. hand-label 200 turns, stratified across judge verdicts
+2. measure verifier and judge against them → precision/recall
+3. fine-tune on 1,000 rows, compare to baseline on held-out calls
+4. only then scale</pre>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">2.2</span><b>Agent selection: volume first, then spread</b><span class="tag data">data</span></div>
+      <p class="why">Resolve the conflict explicitly rather than picking one. Rank by conversation count as you asked, then cap how much any single agent or project may contribute, so a handful of deployments cannot become the corpus.</p>
+      <pre>rank agents by conversation_count DESC
+take in order, subject to:
+  ≤ 3% of the batch from any one agent
+  ≤ 8% from any one project
+  every language present in the inventory gets a floor
+record the realised distribution in the batch manifest</pre>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">2.3</span><b>Score every turn, not just corrected ones</b><span class="tag data">data</span></div>
+      <p class="why">90% of the corpus carries no metric signal. A kept turn is an implicit claim that it was good — make the claim explicit and checkable, and the taxonomy starts describing the data rather than only justifying edits.</p>
+      <pre>auditor emits a per-turn verdict against the applicable variants
+kept turns carry PASS citations; corrected turns carry the failure
+batch manifest reports taxonomy coverage over the whole corpus
+cost: roughly 1 extra call per conversation, not per turn</pre>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">2.4</span><b>Treat tool turns as a first-class case</b><span class="tag data">data</span></div>
+      <p class="why">71 of 271 tool-calling turns say almost nothing while invoking a backend. The refiner corrected 17 of them. This is the exact behaviour you want the fine-tune to learn, and it is the least supervised part of the corpus.</p>
+      <pre>refiner contract: a turn carrying a tool call must also carry a
+  natural holding phrase in the caller's language — never silence,
+  never narration of the call itself
+new deterministic check: tool_call present + spoken text &lt; N chars
+  → flag for correction rather than pass
+acquisition: prefer agents whose traces contain tool calls
+  (17% today is too thin to teach tool use)</pre>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">2.5</span><b>Preference pairs, not just SFT</b><span class="tag data">data</span></div>
+      <p class="why">You generate 661 (source, golden, cited-rule) triples and ship only the golden half. The rejected side is the more informative one, and it is already on disk.</p>
+      <pre>export v4-preference.jsonl: {prompt, chosen, rejected, rule}
+judge-rejected pairs included with polarity inverted</pre>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Phase 3 — Make it survive absence</h2>
+  <div class="phase then">
+    <div class="phase-head"><h3>The difference between a prototype and a system</h3>
+      <span class="when">~1 week</span></div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">3.1</span><b>Structured logging and a circuit breaker</b><span class="tag eng">engineering</span></div>
+      <pre>replace 125 print() with logging, JSON handler, levels
+delete the 12 except:pass swallows — log and re-raise, or handle
+circuit breaker: N consecutive identical failures → pause the run
+  and alert, instead of spending attempt budget on a billing error</pre>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">3.2</span><b>Delete the string-matching tests</b><span class="tag eng">engineering</span></div>
+      <p class="why">Twelve test files assert that certain characters exist in source. They pass when the code is broken and fail on a harmless rename. They give false coverage, which is worse than none because it stops the real test being written.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">3.3</span><b>The agent loop: one refactor, not four</b><span class="tag eng">engineering</span></div>
+      <p class="why">Parallel tools, compaction, token budgets and rolling state are the same loop touched four ways. Do them together or not at all. Ranked last deliberately: this buys a better debugging assistant, not better data.</p>
+      <pre>ACTION_SCHEMA: tool_calls[] instead of tool, executed in parallel
+observations: rolling summary + last N, not a bare [-8:] window
+tool results: cap rows and bytes at the broker, not in the prompt
+budgets: count tokens, not characters (Malayalam is 1.62 bytes/char)
+delete graph_runtime.py and the zen-graph entry point</pre>
+    </div>
+
+    <div class="step">
+      <div class="step-head"><span class="n">3.4</span><b>Migrations, backups, and one honest guide</b><span class="tag eng">engineering</span></div>
+      <pre>schema_version table + forward migrations for 11 stores
+nightly backup of .zen/*.db, restore verified in CI
+rewrite GUIDE.md or delete it — it describes a system that is gone
+split or remove the 3,456-line agent kernel the factory never imports</pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Every item above came from reading the code or measuring its output on
+  2026-08-20, against run <span class="mono">389362df</span> at 809 candidates.
+  The ordering is deliberate: Phase 1 makes the system safe to change, Phase 2
+  makes its output defensible, Phase 3 makes it survive nobody watching. Doing
+  Phase 2 before Phase 1 means fixing data quality on a codebase where nothing
+  catches a regression.
+</footer>
+
+</div>
+</body>
+</html>

@@ -29,6 +29,18 @@ from _transport import active_model, run_model  # noqa: E402
 
 
 MODEL = active_model()
+
+# Below this many spoken characters, a turn is not addressing the caller.
+# Measured: 71 of 271 tool-calling turns fell under it, several saying "hmm".
+MIN_TOOL_TURN_SPEECH = 12
+
+# Control tags are protocol, not speech; they must not count toward the floor.
+_CONTROL_TAG = re.compile(r"<\|[A-Z_]+\|>|\b(?:WAITING|ENDCALL)\s*\d*\b")
+
+
+def _spoken_length(text: str) -> int:
+    """Characters actually addressed to the caller."""
+    return len(_CONTROL_TAG.sub("", text or "").strip())
 ID_RE = re.compile(r"^(?:rd|rp|asg)_[0-9a-f]{64}$")
 # Text that describes the mechanism rather than speaking to the caller.
 _NARRATION_RE = re.compile(
@@ -227,6 +239,16 @@ def validate_decision(decision: dict, packet: dict, registry: dict) -> None:
             row["annotations"] = []
             row["unjustified_replacement_reverted_by_harness"] = True
             continue
+        # A tool-calling turn with no speech is a training example that teaches
+        # the model to invoke a backend while saying nothing. The contract asks
+        # for a holding phrase; when the refiner leaves one short anyway, the
+        # turn is excluded rather than shipped — for SFT every assistant turn is
+        # a target, and this one would teach silence.
+        spoken = _spoken_length(row.get("golden_text") or "")
+        if (row.get("golden_tool_calls") or source.get("tool_calls")) and spoken < MIN_TOOL_TURN_SPEECH:
+            row["evidence_status"] = "INSUFFICIENT"
+            row["silent_tool_turn_excluded_by_harness"] = True
+
         # Never let a fabricated tool call reach the dataset. Adding a call
         # invents an action that never happened and whose result never existed —
         # the model would learn to claim work it did not do. A genuinely missing

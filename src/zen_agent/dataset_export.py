@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,19 @@ REPLAY_PROVENANCE = "PARTIALLY_SYNTHETIC_NOT_BYTE_FAITHFUL"
 
 # Below this many assistant turns there is not enough dialogue to train on.
 MIN_ASSISTANT_TURNS = 3
+
+# In SFT every assistant turn is a training target: the model is being taught to
+# say exactly this. A turn with no speech teaches it to answer with nothing, and
+# a two-character grunt teaches it to stall. Measured before this gate: 1,368
+# assistant turns were the empty string. Control tags are protocol, not speech,
+# so they do not count toward the floor.
+MIN_TARGET_SPEECH = 5
+_CONTROL_TAG = re.compile(r"<\|[A-Z_]+\|>|\b(?:WAITING|ENDCALL)\s*\d*\b")
+
+
+def spoken_length(text: str) -> int:
+    """Characters actually addressed to the caller."""
+    return len(_CONTROL_TAG.sub("", text or "").strip())
 
 
 def _system_prompts(root: Path, run_id: str) -> dict[str, str]:
@@ -114,6 +128,13 @@ def conversation_messages(
         content = turn.get("golden_text")
         if content is None:
             content = turn.get("source_text", "")
+        # A turn with a tool call is allowed to be brief, but not silent; one
+        # without is a pure speech target and must actually say something.
+        if spoken_length(content) < MIN_TARGET_SPEECH and not turn.get("tool_calls"):
+            masked.append(assistant_turns)
+            messages.append({"role": "assistant", "content": content})
+            assistant_turns += 1
+            continue
         message: dict[str, Any] = {"role": "assistant", "content": content}
         tool_calls = turn.get("golden_tool_calls")
         if tool_calls:

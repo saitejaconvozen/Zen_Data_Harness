@@ -17,4 +17,6 @@ export const api = {
   conversation: (id) => get(`/api/conversation/${encodeURIComponent(id)}`),
   metrics: (runId) => get(`/api/metrics${runId ? `?run_id=${runId}` : ""}`),
   golden: () => get("/api/golden"),
+  funnel: () => get("/api/funnel"),
+  activity: () => get("/api/activity"),
 };

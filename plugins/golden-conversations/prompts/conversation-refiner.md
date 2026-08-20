@@ -109,6 +109,28 @@ annotate one.
 requirements. Emit them only where the system prompt's stated condition is
 actually met in context.
 
+
+## A turn that calls a tool must still speak
+
+When an assistant turn carries a tool call, the caller is waiting in silence
+while a backend runs. The turn must say something to them — a short, natural
+holding phrase in the language they are speaking.
+
+Measured on a real batch: 71 of 271 tool-calling turns said almost nothing.
+`get_bookings_by_pnr` was invoked while the agent said `"hmm"`. That is the
+exact behaviour this dataset exists to teach, so it is the worst place in the
+corpus to leave uncorrected — a model trained on it learns to grunt and stall.
+
+- **Acceptable**: "One moment, let me check that for you", "एक मिनट, मैं देख
+  रहा हूँ", "ഒരു നിമിഷം, ഞാൻ നോക്കട്ടെ". Brief, natural, in the caller's language.
+- **Not acceptable**: `"hmm"`, `"ok"`, silence, or a bare control tag.
+- **Never narrate the mechanism.** "Calling the booking tool" would be spoken
+  aloud to a customer. Say what a person would say, not what the system is doing.
+
+If the recorded turn falls short, replace it with a holding phrase and cite the
+conversational-suitability variant. Do not invent a result the tool has not
+returned.
+
 ## Tool calls
 
 Some assistant turns invoke a tool. The call lives in `tool_calls`; the backend's
