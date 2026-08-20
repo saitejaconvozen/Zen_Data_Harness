@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,6 +23,87 @@ from .tools import ToolContext, ToolRegistry
 from .workspace import Workspace
 
 
+# A tool result goes straight into the next prompt. `data.query_ledgers` can
+# return 200 rows of 2,000 characters — 400 KB into a 120 KB budget, silently
+# evicting the objective and every prior finding. Bounding it here means the
+# model sees a truncated result and is told so, rather than losing the rest of
+# its context to one query.
+MAX_RESULT_CHARS = 12_000
+
+
+# Tokens per character, by script family. Deliberately a coarse estimate rather
+# than a tokenizer dependency: the point is that Devanagari and Malayalam cost
+# more per character than Latin, not the third decimal place.
+_DENSE_SCRIPT = re.compile(
+    r"[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF"
+    r"\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]"
+)
+
+
+def estimate_tokens(text: str) -> int:
+    """Approximate token count, weighting non-Latin scripts by their real cost."""
+    if not text:
+        return 0
+    dense = len(_DENSE_SCRIPT.findall(text))
+    latin = len(text) - dense
+    # ~4 Latin characters per token; Indic scripts run closer to 1 per token.
+    return int(latin / 4) + dense
+
+
+def _digest_observations(observations: list[dict[str, Any]]) -> list[str]:
+    """One line per past observation, so nothing older simply disappears.
+
+    The loop used to show the model `observations[-8:]` and nothing else. At 40
+    turns that is amnesia for turns 1-32: the agent cannot know what it already
+    tried, and repeats itself. A digest costs a few hundred characters and keeps
+    the whole history addressable.
+    """
+    lines: list[str] = []
+    for index, item in enumerate(observations, start=1):
+        entries = item.get("parallel_calls") if isinstance(item, dict) else None
+        for entry in entries or [item]:
+            if not isinstance(entry, dict):
+                continue
+            if "delegation" in entry:
+                lines.append(f"{index}. delegated investigation")
+                continue
+            tool = entry.get("tool", "?")
+            status = entry.get("status", "?")
+            detail = ""
+            result = entry.get("result")
+            if isinstance(result, dict):
+                for key in ("row_count", "kinds", "conversations", "count"):
+                    if key in result:
+                        detail = f" ({result[key]} {key})"
+                        break
+            if status != "SUCCEEDED":
+                detail = f" — {str(entry.get('error'))[:90]}"
+            lines.append(f"{index}. {tool} {status}{detail}")
+    return lines
+
+
+def _bound_result(value: Any) -> Any:
+    """Cap a tool result, saying explicitly what was withheld."""
+    encoded = json.dumps(value, ensure_ascii=False, default=str)
+    if len(encoded) <= MAX_RESULT_CHARS:
+        return value
+    if isinstance(value, dict):
+        for key in ("rows", "clusters", "turns", "conversations", "examples"):
+            items = value.get(key)
+            if isinstance(items, list) and len(items) > 1:
+                kept = max(1, len(items) * MAX_RESULT_CHARS // max(len(encoded), 1))
+                trimmed = dict(value)
+                trimmed[key] = items[:kept]
+                trimmed["_truncated"] = (
+                    f"showing {kept} of {len(items)} {key}; narrow the query to see more"
+                )
+                return trimmed
+    return {
+        "_truncated": f"result exceeded {MAX_RESULT_CHARS} characters",
+        "preview": encoded[:MAX_RESULT_CHARS],
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class CodingRuntimeLimits:
     max_executor_turns: int = 40
@@ -29,7 +111,9 @@ class CodingRuntimeLimits:
     max_tool_calls: int = 200
     max_delegates: int = 3
     max_delegate_turns: int = 12
-    max_prompt_chars: int = 120_000
+    # Budgets are in tokens because character budgets are a language bias:
+    # the same character count costs ~1.5x more tokens in Indic scripts.
+    max_prompt_tokens: int = 40_000
 
     def __post_init__(self) -> None:
         values = (
@@ -38,7 +122,7 @@ class CodingRuntimeLimits:
             self.max_tool_calls,
             self.max_delegates,
             self.max_delegate_turns,
-            self.max_prompt_chars,
+            self.max_prompt_tokens,
         )
         if min(values) < 1:
             raise ValueError("coding runtime limits must be positive")
@@ -347,13 +431,28 @@ class CodingRuntime:
                 observation = {"delegation": result}
             else:
                 assert action.tool is not None
-                observation = self._invoke_tool(
-                    session_id,
-                    turn["id"],
-                    action.tool,
-                    action.arguments,
-                    allowed_tools=allowed_tools,
-                )
+                # Independent calls go out together. Serialising them spent a
+                # model round trip per lookup, and with a 20-turn budget an
+                # agent gathering evidence from four sources spent most of its
+                # budget waiting rather than reasoning.
+                if len(action.calls) == 1:
+                    observation = self._invoke_tool(
+                        session_id, turn["id"], action.calls[0].tool,
+                        action.calls[0].arguments, allowed_tools=allowed_tools,
+                    )
+                else:
+                    with ThreadPoolExecutor(
+                        max_workers=min(len(action.calls), self.limits.max_delegates)
+                    ) as pool:
+                        futures = [
+                            pool.submit(
+                                self._invoke_tool, session_id, turn["id"],
+                                call.tool, call.arguments,
+                                allowed_tools=allowed_tools,
+                            )
+                            for call in action.calls
+                        ]
+                        observation = {"parallel_calls": [f.result() for f in futures]}
             observations.append(observation)
             self.state.add_turn(
                 session_id, "tool", observation, agent_name="zen-tool-broker"
@@ -419,8 +518,10 @@ class CodingRuntime:
                 + item["objective"]
                 + "\nUse only these read-only tools:\n"
                 + json.dumps(self.tool_catalog(allowed))
-                + "\nObservations:\n"
-                + json.dumps(observations[-8:])
+                + "\nEverything tried so far:\n"
+                + "\n".join(_digest_observations(observations))
+                + "\nMost recent results in full:\n"
+                + json.dumps(observations[-4:])
                 + "\nReturn final when you have evidence. Do not request edits."
             )
             raw = self._generate(
@@ -562,7 +663,7 @@ class CodingRuntime:
             return {
                 "tool": name,
                 "status": "SUCCEEDED",
-                "result": result,
+                "result": _bound_result(result),
                 "hook_feedback": list(post.feedback),
             }
         except Exception as exc:
@@ -617,7 +718,7 @@ class CodingRuntime:
                 )
         if (self.workspace / "ZEN.md").is_file():
             return WorkspaceContextCompiler(
-                self.workspace, max_chars=min(60_000, self.limits.max_prompt_chars)
+                self.workspace, max_chars=min(60_000, self.limits.max_prompt_tokens * 4)
             ).compile(objective, extra_sections=tuple(extras))
         default = (
             "# Zen default workspace contract\n"
@@ -653,15 +754,21 @@ class CodingRuntime:
                     "turn": turn_number,
                     "verifier_or_human_feedback": feedback,
                     "available_tools": catalog,
-                    "recent_observations": observations[-12:],
+                    # A one-line digest of everything tried, then the recent
+                    # results in full. Showing only a trailing window meant the
+                    # agent could not know what it had already done.
+                    "everything_tried": _digest_observations(observations),
+                    "recent_observations": observations[-6:],
                 },
                 ensure_ascii=False,
             )
-            + "\nChoose one tool_call, one bounded delegate batch for independent read-only "
-            + "investigation, ask_human only for a genuine blocker, or final only after "
-            + "proportionate verification. The arguments field must always be a JSON-encoded "
-            + "object string. For delegate, encode "
-            + '{"tasks":[{"objective":"...","agent":"investigator"}]} in that string.'
+            + "\nChoose tool_call with one or more calls in `calls`, a bounded delegate "
+            + "batch for independent read-only investigation, ask_human only for a genuine "
+            + "blocker, or final only after proportionate verification.\n"
+            + "Put every call that does not depend on another's result in the SAME turn — "
+            + "they run together. Anything needing a previous result goes in the next turn.\n"
+            + "Each call's arguments must be a JSON-encoded object string. For delegate, "
+            + 'encode {"tasks":[{"objective":"...","agent":"investigator"}]} in `message`.'
         )
 
     def _agent(self, role: str) -> AgentManifest:
@@ -832,6 +939,30 @@ class CodingRuntime:
             self.progress(event, payload)
 
     def _bounded(self, value: str) -> str:
-        if len(value) <= self.limits.max_prompt_chars:
+        """Trim a prompt to the token budget, cutting the middle rather than the tail.
+
+        Two faults this replaces. It counted characters, and token cost per
+        character is not uniform: measured across this corpus, English is 1.05
+        bytes/char and Malayalam 1.62, so a character budget was a materially
+        smaller budget for Indic languages — the agent's context silently shrank
+        for exactly the languages the corpus was widened to include.
+
+        And it cut the tail, which is where the newest observation lives. The
+        head carries the objective and the plan; the tail carries what just
+        happened. Both matter more than the middle, so the middle goes.
+        """
+        budget = self.limits.max_prompt_tokens
+        if estimate_tokens(value) <= budget:
             return value
-        return value[: self.limits.max_prompt_chars] + "\n...[context truncated by Zen]"
+        # Convert back to a character allowance using this text's own density,
+        # so the trim is proportionate for the script actually in use.
+        density = max(estimate_tokens(value), 1) / max(len(value), 1)
+        allowance = int(budget / density)
+        head = int(allowance * 0.6)
+        tail = allowance - head
+        dropped = len(value) - head - tail
+        return (
+            value[:head]
+            + f"\n...[{dropped} characters of older context withheld by Zen]...\n"
+            + value[-tail:]
+        )
