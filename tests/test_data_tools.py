@@ -299,3 +299,25 @@ class MetricsRecorderTests(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("ZEN_METRICS_STRICT", source)
         self.assertIn("metrics-errors.log", source)
+
+
+class CheckpointGateTests(unittest.TestCase):
+    """The approval ceiling must be reachable, not merely declared.
+
+    The supervisor can only evaluate the gate between driver invocations. With
+    an unbounded refinement budget the driver ran for hours in a single pass and
+    overshot a 500 ceiling to 809 before anything checked. Bounding the pass to
+    the remaining headroom is what makes the ceiling mean something.
+    """
+
+    def test_supervisor_bounds_each_pass_by_remaining_headroom(self) -> None:
+        script = (ROOT / "scripts" / "run-gemini-batch.sh").read_text(encoding="utf-8")
+        self.assertIn("headroom=$(( ceiling - have ))", script)
+        self.assertIn('--max-refinement-items "$(( headroom * 6 ))"', script)
+        self.assertNotIn("--max-refinement-items 80000", script)
+
+    def test_supervisor_holds_before_starting_a_driver(self) -> None:
+        script = (ROOT / "scripts" / "run-gemini-batch.sh").read_text(encoding="utf-8")
+        hold = script.index("awaiting-approval")
+        launch = script.index("zen-factory-run")
+        self.assertLess(hold, launch, "the hold must precede the driver launch")

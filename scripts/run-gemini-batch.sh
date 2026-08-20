@@ -53,11 +53,17 @@ while true; do
     fi
     rm -f "$HELD"
 
+    # Bound the pass so the gate is actually reachable. The supervisor can only
+    # check the ceiling between invocations, so a driver told to drain 80,000
+    # items runs for hours and sails straight past the checkpoint — which is
+    # what happened: a 500 ceiling was overshot to 809 in one pass.
+    headroom=$(( ceiling - have ))
+    [ "$headroom" -lt 50 ] && headroom=50
     .venv/bin/zen-factory-run "$RUN" \
         --inventory-artifact "$INV" --site ".zen/sites/$RUN" \
         --workers "$WORKERS" --max-acquisition-items 40000 \
-        --max-refinement-items 80000 --max-repair-rounds 2 \
-        --acquisition-per-pass 400 --publish-every 500 \
+        --max-refinement-items "$(( headroom * 6 ))" --max-repair-rounds 2 \
+        --acquisition-per-pass 400 --publish-every 200 \
         >> ".zen/logs/$RUN.log" 2>&1
 
     # Recover anything that dead-lettered on a transient fault before retrying.

@@ -107,9 +107,103 @@ def _mongo_id_type(value: Any) -> str:
     return "objectid" if type(value).__name__ == "ObjectId" else "string"
 
 
-_RUNTIME_METADATA = re.compile(
-    r"^\s*<session_metadata>.*?</session_metadata>\s*$", re.I | re.S
+# Runtime scaffolding that a transcript carries but a person never said.
+#
+# These were only ever matched as a *whole* turn, so a turn like
+# "[voice] <session_metadata>...</session_metadata> hello?" sailed through as
+# dialogue. Half the corpus ended up carrying XML metadata — with real phone
+# numbers — in the assistant position, which a fine-tune would learn to emit.
+#
+# The rule is simple: a conversation is what the two people said. Everything the
+# platform inserted around it is stripped here, at the boundary, so no later
+# stage has to know it ever existed.
+_METADATA_BLOCK = re.compile(r"<session_metadata>.*?</session_metadata>", re.I | re.S)
+
+# A key/value preamble some agents emit instead of the XML form.
+_METADATA_FIELDS = re.compile(
+    r"^\s*(?:dealer_name|user_phone_number|agent_name|dealer_id|user_number|"
+    r"did_no|call_id|user_time|user_time_day|customer_?name|account_no)\s*:.*$",
+    re.I | re.M,
 )
+
+# The platform's placeholder for silence. It sits in the caller position and
+# reads like speech, which makes it the most damaging artifact of all: a model
+# trained on it learns that users say this sentence.
+_SILENCE_PLACEHOLDER = re.compile(
+    r"^\s*(?:\[voice\]\s*)?user\s+did\s*n[o']?t\s+respond.*$", re.I | re.S
+)
+
+# Speech-to-text diagnostics wrapped around the transcript. The platform emits
+#
+#   [WARNING: Low confidence]
+#   System: ...confidence is low (score=..., provider=...).
+#   Transcript: no we can connect we can have you
+#   If the text seems illogical, politely ask the user to repeat...
+#
+# The caller really did say the Transcript line. Discarding the whole block
+# would throw away speech; keeping it would train the model on the platform's
+# own instructions to itself.
+_STT_TRANSCRIPT = re.compile(
+    r"\[WARNING:[^\]]*\].*?^Transcript:[ \t]*(?P<speech>.*?)$",
+    re.I | re.S | re.M,
+)
+_STT_GUIDANCE = re.compile(
+    r"^\s*If the text seems illogical.*", re.I | re.S | re.M
+)
+# Fallback for a warning block with no Transcript line: drop only the
+# diagnostic lines, never the speech that may follow them.
+_STT_LINES = re.compile(
+    r"^\s*(?:\[WARNING:[^\]]*\]|System:[^\n]*)\s*$", re.I | re.M
+)
+
+# A bare leading channel marker; the words after it are real speech.
+_CHANNEL_MARKER = re.compile(r"^\s*\[(?:voice|audio|dtmf)\]\s*", re.I)
+
+
+def sanitise_turn(text: str) -> tuple[str, tuple[str, ...]]:
+    """Return the speech in a recorded turn, and what was removed.
+
+    Deterministic and lossless in the sense that matters: what a person said is
+    preserved exactly. Only platform scaffolding is taken out, and every removal
+    is named so the packet records what happened rather than quietly differing
+    from the source.
+    """
+    removed: list[str] = []
+    cleaned = text
+
+    if _SILENCE_PLACEHOLDER.match(cleaned.strip()):
+        # Not speech at all. The caller was silent.
+        return "", ("silence_placeholder",)
+
+    # A low-confidence block still contains real speech on its Transcript line.
+    match = _STT_TRANSCRIPT.search(cleaned)
+    if match:
+        cleaned = match.group("speech").strip()
+        removed.append("stt_warning")
+    else:
+        stripped = _STT_LINES.sub("", cleaned)
+        if stripped != cleaned:
+            cleaned = stripped
+            removed.append("stt_warning")
+    cleaned = _STT_GUIDANCE.sub("", cleaned)
+
+    for name, pattern in (
+        ("session_metadata", _METADATA_BLOCK),
+        ("metadata_fields", _METADATA_FIELDS),
+    ):
+        if pattern.search(cleaned):
+            cleaned = pattern.sub("", cleaned)
+            removed.append(name)
+
+    stripped = _CHANNEL_MARKER.sub("", cleaned)
+    if stripped != cleaned:
+        removed.append("channel_marker")
+        cleaned = stripped
+
+    # Collapse the whitespace the removals leave behind.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, tuple(removed)
+
 
 
 def _normalise_tool_calls(raw: Any) -> list[dict[str, Any]]:
@@ -181,14 +275,26 @@ def bind_conversation(document: dict[str, Any], max_chars: int = 100_000) -> dic
         if role == "system" and not system_prompt:
             system_prompt = text
             continue
-        if text and _RUNTIME_METADATA.match(text):
+
+        # Strip platform scaffolding before anything else sees the turn. Doing
+        # it here rather than at export means every later stage — audit,
+        # refine, verify, judge, dataset — works on speech only, and none of
+        # them needs to know this scaffolding ever existed.
+        speech, removed = sanitise_turn(text)
+        if not speech and not tool_calls:
+            # Nothing was said. Keep it out of the dialogue but on the record,
+            # so turn indices and the audit trail stay honest.
             role = "runtime_metadata"
         turn = {
             "source_index": index,
             "role": role,
-            "text": text,
-            "text_sha256": _hash_text(text),
+            "text": speech,
+            "text_sha256": _hash_text(speech),
+            # The source is still recoverable and provably unmodified.
+            "raw_text_sha256": _hash_text(text),
         }
+        if removed:
+            turn["sanitised"] = list(removed)
         if tool_calls:
             turn["tool_calls"] = _normalise_tool_calls(tool_calls)
             turn["tool_calls_sha256"] = _hash_text(
@@ -203,8 +309,17 @@ def bind_conversation(document: dict[str, Any], max_chars: int = 100_000) -> dic
     call_id = str(document.get("call_id") or document.get("_id") or "")
     if not agent_id or not call_id:
         raise ValueError("conversation is missing agent_id or call_id")
-    user_turns = sum(item["role"] == "user" for item in turns)
-    assistant_turns = sum(item["role"] == "assistant" for item in turns)
+    # Count only turns that carry speech. A conversation whose caller side is
+    # mostly silence placeholders is not a conversation, and before
+    # sanitisation it counted as one.
+    user_turns = sum(
+        1 for item in turns if item["role"] == "user" and item["text"].strip()
+    )
+    assistant_turns = sum(
+        1 for item in turns
+        if item["role"] == "assistant"
+        and (item["text"].strip() or item.get("tool_calls"))
+    )
     if user_turns < 3 or assistant_turns < 3:
         raise ValueError("conversation has fewer than three user/assistant turns")
     source_payload = json.dumps(
