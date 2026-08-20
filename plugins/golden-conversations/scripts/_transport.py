@@ -488,6 +488,65 @@ def read_case_file(path: Path, role: str) -> str:
     )
 
 
+# A shared, file-backed breaker. Workers are separate processes, so each one
+# would otherwise rediscover an outage independently: six hours of retrying an
+# out-of-credits error, spending attempt budget on healthy conversations, is
+# exactly what happened. When calls fail identically in a row, everyone waits.
+_BREAKER = Path(".zen/model-breaker.json")
+BREAKER_THRESHOLD = int(os.environ.get("ZEN_BREAKER_THRESHOLD", "8"))
+BREAKER_COOLDOWN = int(os.environ.get("ZEN_BREAKER_COOLDOWN", "120"))
+
+
+def _breaker_path() -> Path:
+    root = Path(__file__).resolve().parents[3]
+    return root / ".zen" / "model-breaker.json"
+
+
+def _breaker_state() -> dict:
+    try:
+        return json.loads(_breaker_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"consecutive": 0, "open_until": 0.0, "reason": ""}
+
+
+def _breaker_write(state: dict) -> None:
+    try:
+        path = _breaker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def breaker_check() -> None:
+    """Refuse to call the model while the breaker is open."""
+    state = _breaker_state()
+    remaining = float(state.get("open_until") or 0) - time.time()
+    if remaining > 0:
+        raise RuntimeError(
+            f"model breaker open for another {int(remaining)}s after "
+            f"{state.get('consecutive')} consecutive failures: {state.get('reason')}"
+        )
+
+
+def breaker_record(error: str | None) -> None:
+    """Count a failure, or clear the count on any success."""
+    state = _breaker_state()
+    if error is None:
+        if state.get("consecutive"):
+            _breaker_write({"consecutive": 0, "open_until": 0.0, "reason": ""})
+        return
+    consecutive = int(state.get("consecutive") or 0) + 1
+    new = {"consecutive": consecutive, "open_until": state.get("open_until", 0.0),
+           "reason": error[:200]}
+    if consecutive >= BREAKER_THRESHOLD:
+        # Widen the cooldown as failures persist: a rate limit clears by itself,
+        # an expired credential does not.
+        multiplier = 1 + (consecutive - BREAKER_THRESHOLD) // BREAKER_THRESHOLD
+        new["open_until"] = time.time() + BREAKER_COOLDOWN * multiplier
+    _breaker_write(new)
+
+
 def run_model(
     *,
     prompt: str,
@@ -510,6 +569,7 @@ def run_model(
     prompt = prompt + read_case_file(case_file, role)
     current = provider()
     _LAST_USAGE.clear()
+    breaker_check()
     started = time.time()
     try:
         if current == "claude":
@@ -521,7 +581,9 @@ def run_model(
     except Exception as exc:
         _record_metrics(role, output_path, int((time.time() - started) * 1000),
                         "FAILED", type(exc).__name__)
+        breaker_record(f"{type(exc).__name__}: {exc}")
         raise
+    breaker_record(None)
     _record_metrics(role, output_path, int((time.time() - started) * 1000), "SUCCEEDED")
     log_path.write_text(transcript, encoding="utf-8")
     os.chmod(log_path, 0o600)

@@ -19,6 +19,13 @@ mkdir -p .zen/logs
 listening() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
 
 while true; do
+    # The model proxy is what the whole pipeline depends on; a website that is
+    # up while the proxy is down is the least useful combination there is.
+    if ! listening 4000; then
+        echo "$(date -Is) restarting litellm proxy" >> .zen/logs/keepalive.log
+        ./scripts/start-litellm.sh >> .zen/logs/keepalive.log 2>&1
+        sleep 5
+    fi
     if ! listening 8899; then
         echo "$(date -Is) restarting status server" >> .zen/logs/keepalive.log
         setsid nohup .venv/bin/zen-factory-status "$RUN_ID" \
