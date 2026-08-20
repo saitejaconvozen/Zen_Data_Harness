@@ -16,4 +16,5 @@ export const api = {
   conversations: () => get("/api/conversations"),
   conversation: (id) => get(`/api/conversation/${encodeURIComponent(id)}`),
   metrics: (runId) => get(`/api/metrics${runId ? `?run_id=${runId}` : ""}`),
+  golden: () => get("/api/golden"),
 };

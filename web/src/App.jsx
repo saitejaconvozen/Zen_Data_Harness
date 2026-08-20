@@ -3,15 +3,17 @@ import { api } from "./api.js";
 import Overview from "./Overview.jsx";
 import Traces from "./Traces.jsx";
 import Performance from "./Performance.jsx";
+import Golden from "./Golden.jsx";
 
 const VIEWS = [
   ["overview", "Overview"],
+  ["golden", "Golden conversations"],
   ["traces", "Call traces"],
   ["performance", "Performance"],
 ];
 
 export default function App() {
-  const [view, setView] = useState("overview");
+  const [view, setView] = useState("golden");
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
 
@@ -49,6 +51,7 @@ export default function App() {
       </aside>
       <main className="main">
         {view === "overview" && <Overview status={status} />}
+        {view === "golden" && <Golden />}
         {view === "traces" && <Traces />}
         {view === "performance" && <Performance runId={runId} />}
       </main>

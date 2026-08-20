@@ -844,6 +844,31 @@ def main(argv: list[str] | None = None) -> int:
                     json.dumps(snapshot(root, args.run_id)).encode("utf-8"),
                     "application/json",
                 )
+            elif path == "/api/golden":
+                # The dispatch view: exchanges paired by call direction, every
+                # correction resolved to its axis/sub-axis/variant by name.
+                # Built from the same code that writes the batch file, so what
+                # a reviewer reads on screen is what gets dispatched.
+                from .dispatch_export import RELEASABLE, conversation_record
+
+                review = _review(root, args.run_id)
+                records = []
+                for conversation in review["conversations"]:
+                    if (conversation.get("terminal") or {}).get("status") not in RELEASABLE:
+                        continue
+                    record = conversation_record(conversation, args.run_id)
+                    if record is None:
+                        continue
+                    record.pop("_citations", None)
+                    records.append(record)
+                self._send(
+                    json.dumps({
+                        "run_id": args.run_id,
+                        "count": len(records),
+                        "conversations": records,
+                    }).encode("utf-8"),
+                    "application/json",
+                )
             elif path == "/api/metrics":
                 # Observability lives in its own store so the reporting query
                 # can never contend with the queue's hot write path.

@@ -88,3 +88,50 @@ tbody tr:last-child td { border-bottom: none; }
   .side { position: static; height: auto; }
   .split, .compare { grid-template-columns: 1fr; }
 }
+
+/* ---- golden conversations ------------------------------------------- */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { all: unset; cursor: pointer; padding: 4px 10px; border-radius: 99px;
+        border: 1px solid var(--ring); color: var(--muted); font-size: 11.5px; }
+.chip:hover { color: var(--ink); }
+.chip[aria-pressed="true"] { background: var(--plane); color: var(--ink);
+                             border-color: var(--accent); font-weight: 600; }
+
+.detail-head { display: flex; justify-content: space-between; align-items: flex-start;
+               gap: 14px; margin-bottom: 14px; }
+.detail-head h2 { margin: 0 0 3px; font-size: 15px; text-transform: none;
+                  letter-spacing: 0; color: var(--ink); }
+
+.coverage { border: 1px solid var(--ring); border-radius: 8px; padding: 12px 14px;
+            margin-bottom: 16px; }
+.coverage h3 { margin: 0 0 9px; font-size: 11px; text-transform: uppercase;
+               letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+.cov-axis { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px;
+            padding: 6px 0; border-bottom: 1px solid var(--ring); }
+.cov-axis:last-child { border-bottom: none; }
+.cov-name { font-weight: 600; font-size: 12.5px; }
+.cov-n { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+.cov-subs { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px; }
+.cov-sub { font-size: 11px; color: var(--muted); border: 1px solid var(--ring);
+           border-radius: 5px; padding: 1px 7px; }
+.cov-sub em { font-style: normal; color: var(--ink); }
+
+.exchanges { display: flex; flex-direction: column; gap: 14px; }
+.exchange { display: grid; grid-template-columns: 26px 1fr; gap: 10px; }
+.ex-index { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted);
+            text-align: right; padding-top: 12px; font-variant-numeric: tabular-nums; }
+.ex-body { display: flex; flex-direction: column; gap: 8px; }
+
+.turn .tid { margin-left: auto; font-size: 10px; color: var(--muted); }
+.turn.caller { background: var(--plane); }
+.turn.agent.changed { border-color: color-mix(in srgb, var(--warn) 45%, var(--ring)); }
+
+.metrics { display: flex; flex-direction: column; gap: 5px; margin-top: 9px;
+           padding-top: 9px; border-top: 1px dashed var(--ring); }
+.metric { display: flex; flex-wrap: wrap; justify-content: space-between;
+          gap: 6px; align-items: center; }
+.metric .path { font-size: 11.5px; color: var(--ink); }
+.metric .path em { font-style: normal; color: var(--muted); margin: 0 3px; }
+.metric .verdicts { display: flex; gap: 5px; }
+.pill.accent { color: var(--accent);
+               border-color: color-mix(in srgb, var(--accent) 45%, var(--ring)); }
